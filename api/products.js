@@ -1,5 +1,7 @@
 const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
 const PAGE_SIZE = 24;
+const CONCURRENCY = 6;
+const FETCH_TIMEOUT_MS = 12000;
 
 function decodeHtml(s = '') {
   return s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -37,9 +39,26 @@ function parseProduct(html, sourceUrl) {
 }
 function applyMargin(cost) { if (cost == null) return null; const multiplier = cost < 500 ? 1.45 : cost <= 1000 ? 1.35 : 1.25; return Math.ceil((cost * multiplier) / 10) * 10; }
 async function fetchHtml(url) {
-  const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.1; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store' });
-  if (!response.ok) throw new Error(`UFRA ${response.status} at ${url}`);
-  return response.text();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.2; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
+    if (!response.ok) throw new Error(`UFRA ${response.status}`);
+    return await response.text();
+  } finally { clearTimeout(timeout); }
+}
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function run() {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
 }
 export default async function handler(req, res) {
   try {
@@ -51,9 +70,20 @@ export default async function handler(req, res) {
     const catalogTotal = findCatalogTotal(categoryHtml);
     const totalPages = catalogTotal ? Math.ceil(catalogTotal / PAGE_SIZE) : null;
     if (!links.length) throw new Error('No product links detected on UFRA category page');
-    const products = [];
-    for (const url of links) { try { const html = await fetchHtml(url), product = parseProduct(html, url); products.push({ ...product, salePrice: applyMargin(product.supplierPrice), syncedAt: new Date().toISOString() }); } catch (error) { products.push({ sourceUrl: url, error: error.message }); } }
+    const products = await mapWithConcurrency(links, CONCURRENCY, async (url) => {
+      try {
+        const html = await fetchHtml(url);
+        const product = parseProduct(html, url);
+        return { ...product, salePrice: applyMargin(product.supplierPrice), syncedAt: new Date().toISOString() };
+      } catch (error) {
+        const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder' : error.message;
+        return { sourceUrl: url, error: message };
+      }
+    });
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ ok: true, source: pageUrl, page, pageSize: PAGE_SIZE, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext: totalPages ? page < totalPages : products.length === PAGE_SIZE, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', products });
-  } catch (error) { res.status(502).json({ ok: false, error: error.message }); }
+  } catch (error) {
+    const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder' : error.message;
+    res.status(502).json({ ok: false, error: message });
+  }
 }
