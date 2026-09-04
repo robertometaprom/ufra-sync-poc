@@ -1,4 +1,5 @@
 const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
+const PAGE_SIZE = 24;
 
 function decodeHtml(s = '') {
   return s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -9,8 +10,13 @@ function findProductLinks(html) {
   const links = [], seen = new Set();
   const re = /<a[^>]+class=["'][^"']*product-item-link[^"']*["'][^>]+href=["']([^"']+)["']/gi;
   let m;
-  while ((m = re.exec(html)) && links.length < 10) { const url = decodeHtml(m[1]); if (!seen.has(url)) { seen.add(url); links.push(url); } }
+  while ((m = re.exec(html)) && links.length < PAGE_SIZE) { const url = decodeHtml(m[1]); if (!seen.has(url)) { seen.add(url); links.push(url); } }
   return links;
+}
+function findCatalogTotal(html) {
+  const matches = [...html.matchAll(/Artículos\s+[\d,]+-[\d,]+\s+de\s+([\d,]+)/gi)];
+  if (!matches.length) return null;
+  return Number(matches[0][1].replace(/,/g, '')) || null;
 }
 function parseJsonLd(html) {
   const scripts = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
@@ -31,17 +37,23 @@ function parseProduct(html, sourceUrl) {
 }
 function applyMargin(cost) { if (cost == null) return null; const multiplier = cost < 500 ? 1.45 : cost <= 1000 ? 1.35 : 1.25; return Math.ceil((cost * multiplier) / 10) * 10; }
 async function fetchHtml(url) {
-  const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.0; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store' });
+  const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.1; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store' });
   if (!response.ok) throw new Error(`UFRA ${response.status} at ${url}`);
   return response.text();
 }
 export default async function handler(req, res) {
   try {
-    const categoryHtml = await fetchHtml(CATEGORY_URL), links = findProductLinks(categoryHtml);
+    const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const pageUrl = page === 1 ? CATEGORY_URL : `${CATEGORY_URL}?p=${page}`;
+    const categoryHtml = await fetchHtml(pageUrl);
+    const links = findProductLinks(categoryHtml);
+    const catalogTotal = findCatalogTotal(categoryHtml);
+    const totalPages = catalogTotal ? Math.ceil(catalogTotal / PAGE_SIZE) : null;
     if (!links.length) throw new Error('No product links detected on UFRA category page');
     const products = [];
-    for (const url of links.slice(0, 10)) { try { const html = await fetchHtml(url), product = parseProduct(html, url); products.push({ ...product, salePrice: applyMargin(product.supplierPrice), syncedAt: new Date().toISOString() }); } catch (error) { products.push({ sourceUrl: url, error: error.message }); } }
+    for (const url of links) { try { const html = await fetchHtml(url), product = parseProduct(html, url); products.push({ ...product, salePrice: applyMargin(product.supplierPrice), syncedAt: new Date().toISOString() }); } catch (error) { products.push({ sourceUrl: url, error: error.message }); } }
     res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({ ok: true, source: CATEGORY_URL, count: products.length, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', products });
+    res.status(200).json({ ok: true, source: pageUrl, page, pageSize: PAGE_SIZE, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext: totalPages ? page < totalPages : products.length === PAGE_SIZE, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', products });
   } catch (error) { res.status(502).json({ ok: false, error: error.message }); }
 }
