@@ -1,10 +1,18 @@
 const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
 const PAGE_SIZE = 24;
-const CONCURRENCY = 6;
-const FETCH_TIMEOUT_MS = 12000;
+const CONCURRENCY = 3;
+const FETCH_TIMEOUT_MS = 18000;
+const FETCH_ATTEMPTS = 3;
 
-function decodeHtml(s = '') { return s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>'); }
-function stripHtml(s = '') { return decodeHtml(s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()); }
+function decodeHtml(s = '') {
+  return String(s)
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>');
+}
+function cleanText(s = '') { return decodeHtml(String(s)).replace(/\s+/g, ' ').trim(); }
+function stripHtml(s = '') { return cleanText(String(s).replace(/<[^>]+>/g, ' ')); }
 function moneyToNumber(value = '') { const n = Number(String(value).replace(/[^0-9.]/g, '')); return Number.isFinite(n) ? n : null; }
 function findProductLinks(html) {
   const links = [], seen = new Set();
@@ -26,31 +34,44 @@ function parseJsonLd(html) {
 function firstMatch(html, patterns) { for (const re of patterns) { const m = html.match(re); if (m?.[1]) return stripHtml(m[1]); } return null; }
 function parseProduct(html, sourceUrl) {
   const ld = parseJsonLd(html), offers = Array.isArray(ld?.offers) ? ld.offers[0] : ld?.offers;
-  const name = ld?.name || firstMatch(html, [/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i, /<span[^>]+data-ui-id=["']page-title-wrapper["'][^>]*>([\s\S]*?)<\/span>/i, /<h1[^>]*>([\s\S]*?)<\/h1>/i]);
-  const sku = ld?.sku || firstMatch(html, [/itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /class=["'][^"']*value[^"']*["'][^>]*itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /SKU\s*[:#]?\s*<[^>]*>([^<]+)/i]);
+  const rawName = ld?.name || firstMatch(html, [/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i, /<span[^>]+data-ui-id=["']page-title-wrapper["'][^>]*>([\s\S]*?)<\/span>/i, /<h1[^>]*>([\s\S]*?)<\/h1>/i]);
+  const sku = cleanText(ld?.sku || firstMatch(html, [/itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /class=["'][^"']*value[^"']*["'][^>]*itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /SKU\s*[:#]?\s*<[^>]*>([^<]+)/i]) || '');
+  const name = cleanText(rawName || '');
   const price = moneyToNumber(offers?.price) || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /data-price-type=["']finalPrice["'][\s\S]{0,500}?<span[^>]+class=["'][^"']*price[^"']*["'][^>]*>([^<]+)<\/span>/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
   const availabilityRaw = String(offers?.availability || '');
   const inStock = availabilityRaw ? /InStock/i.test(availabilityRaw) : !/Agotado|Sin existencias/i.test(html);
   const image = ld?.image ? (Array.isArray(ld.image) ? ld.image[0] : ld.image) : firstMatch(html, [/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i]);
-  const brand = typeof ld?.brand === 'string' ? ld.brand : ld?.brand?.name || (name ? name.split(' ')[0] : null);
+  const rawBrand = typeof ld?.brand === 'string' ? ld.brand : ld?.brand?.name;
+  const brand = cleanText(rawBrand || (name ? name.split(' ')[0] : '')) || null;
   return { sku, name, brand, supplierPrice: price, inStock, image, sourceUrl };
 }
 function applyMargin(cost) { if (cost == null) return null; const multiplier = cost < 500 ? 1.45 : cost <= 1000 ? 1.35 : 1.25; return Math.ceil((cost * multiplier) / 10) * 10; }
-async function fetchHtml(url) {
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+async function fetchHtmlOnce(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.3; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
+    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.4; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new Error(`UFRA ${response.status}`);
     return await response.text();
   } finally { clearTimeout(timeout); }
+}
+async function fetchHtml(url) {
+  let lastError;
+  for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
+    try { return await fetchHtmlOnce(url); }
+    catch (error) {
+      lastError = error;
+      if (attempt < FETCH_ATTEMPTS) await sleep(350 * attempt);
+    }
+  }
+  throw lastError;
 }
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length); let next = 0;
   async function run() { while (true) { const index = next++; if (index >= items.length) return; results[index] = await worker(items[index], index); } }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run)); return results;
 }
-
 function supabaseConfig() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -84,12 +105,8 @@ async function syncProduct(product, supplierId, storeId) {
   }
   const supplierRow = { supplier_id: supplierId, product_id: productId, supplier_sku: String(product.sku), supplier_name: product.name, source_url: product.sourceUrl, supplier_price: product.supplierPrice, currency: 'MXN', in_stock: product.inStock, image_url: product.image, raw_attributes: { brand: product.brand }, last_seen_at: now, last_synced_at: now, active: true };
   let supplierProductId = existing?.[0]?.id;
-  if (supplierProductId) {
-    await db(`supplier_products?id=eq.${supplierProductId}`, { method: 'PATCH', prefer: 'return=minimal', body: supplierRow });
-  } else {
-    const created = await db('supplier_products?select=id', { method: 'POST', prefer: 'return=representation', body: supplierRow });
-    supplierProductId = created?.[0]?.id;
-  }
+  if (supplierProductId) await db(`supplier_products?id=eq.${supplierProductId}`, { method: 'PATCH', prefer: 'return=minimal', body: supplierRow });
+  else { const created = await db('supplier_products?select=id', { method: 'POST', prefer: 'return=representation', body: supplierRow }); supplierProductId = created?.[0]?.id; }
   const storeExisting = await db(`store_products?store_id=eq.${storeId}&supplier_product_id=eq.${supplierProductId}&select=id&limit=1`);
   const storeRow = { store_id: storeId, product_id: productId, supplier_product_id: supplierProductId, sale_price: product.salePrice, published: Boolean(product.inStock), updated_at: now };
   if (storeExisting?.[0]?.id) await db(`store_products?id=eq.${storeExisting[0].id}`, { method: 'PATCH', prefer: 'return=minimal', body: storeRow });
@@ -106,14 +123,11 @@ async function syncPage(products, page) {
     try { results.push(await syncProduct(product, supplierId, storeId)); }
     catch (error) { results.push({ skipped: true, sku: product.sku || null, reason: error.message }); }
   }
-  const valid = results.filter(r => !r.skipped);
-  const errors = results.filter(r => r.skipped);
-  const created = valid.filter(r => r.created).length;
-  const updated = valid.length - created;
+  const valid = results.filter(r => !r.skipped), errors = results.filter(r => r.skipped);
+  const created = valid.filter(r => r.created).length, updated = valid.length - created;
   if (runId) await db(`sync_runs?id=eq.${runId}`, { method: 'PATCH', prefer: 'return=minimal', body: { status: errors.length ? 'completed_with_errors' : 'completed', pages_processed: 1, products_seen: products.length, products_created: created, products_updated: updated, errors: errors.length, error_details: errors.slice(0, 20), finished_at: new Date().toISOString() } });
   return { runId, saved: valid.length, created, updated, errors: errors.length, details: errors };
 }
-
 export default async function handler(req, res) {
   try {
     const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
@@ -127,13 +141,13 @@ export default async function handler(req, res) {
     if (!links.length) throw new Error('No product links detected on UFRA category page');
     const products = await mapWithConcurrency(links, CONCURRENCY, async (url) => {
       try { const html = await fetchHtml(url); const product = parseProduct(html, url); return { ...product, salePrice: applyMargin(product.supplierPrice), syncedAt: new Date().toISOString() }; }
-      catch (error) { const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder' : error.message; return { sourceUrl: url, error: message }; }
+      catch (error) { const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder después de reintentos' : error.message; return { sourceUrl: url, error: message }; }
     });
     const databaseSync = shouldSync ? await syncPage(products, page) : null;
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ ok: true, source: pageUrl, page, pageSize: PAGE_SIZE, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext: totalPages ? page < totalPages : products.length === PAGE_SIZE, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', databaseSync, products });
   } catch (error) {
-    const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder' : error.message;
+    const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder después de reintentos' : error.message;
     res.status(502).json({ ok: false, error: message });
   }
 }
