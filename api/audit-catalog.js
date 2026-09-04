@@ -1,7 +1,6 @@
 const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
 const PAGE_SIZE = 24;
 const FETCH_TIMEOUT_MS = 12000;
-const CONCURRENCY = 8;
 
 function decodeHtml(s = '') {
   return String(s)
@@ -12,11 +11,24 @@ function decodeHtml(s = '') {
 }
 function cleanText(s = '') { return decodeHtml(String(s)).replace(/\s+/g, ' ').trim(); }
 function stripHtml(s = '') { return cleanText(String(s).replace(/<[^>]+>/g, ' ')); }
+
 function findCatalogTotal(html) {
   const text = stripHtml(html);
-  const m = text.match(/Art[ií]culos\s+[\d,]+-[\d,]+\s+de\s+([\d,]+)/i);
-  return m ? Number(m[1].replace(/,/g, '')) || null : null;
+  const patterns = [
+    /Art[ií]culos\s+[\d,.]+\s*[-–]\s*[\d,.]+\s+de\s+([\d,.]+)/i,
+    /Items?\s+[\d,.]+\s*[-–]\s*[\d,.]+\s+of\s+([\d,.]+)/i,
+    /([\d,.]+)\s+Art[ií]culos/i
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m?.[1]) {
+      const n = Number(m[1].replace(/[^0-9]/g, ''));
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return null;
 }
+
 function findProductLinks(html) {
   const decoded = decodeHtml(html);
   const seen = new Set();
@@ -28,22 +40,39 @@ function findProductLinks(html) {
   for (const re of patterns) {
     let m;
     while ((m = re.exec(decoded))) {
-      const url = m[1].replace(/&amp;/g, '&').split('#')[0];
+      const url = decodeHtml(m[1]).split('#')[0];
       if (/\/categorias\//i.test(url) || /\/catalogos(?:\/|\.html)/i.test(url)) continue;
       if (!seen.has(url)) { seen.add(url); links.push(url); }
     }
   }
   return links.slice(0, PAGE_SIZE);
 }
+
+function hasExplicitNextPage(html, page) {
+  const decoded = decodeHtml(html);
+  const nextPage = page + 1;
+  const pageHref = new RegExp(`href=["'][^"']*(?:\\?|&)p=${nextPage}(?:&[^"']*)?["']`, 'i');
+  if (pageHref.test(decoded)) return true;
+  return /class=["'][^"']*action\s+next[^"']*["']/i.test(decoded) && /P[aá]gina\s+Siguiente|Siguiente|Next/i.test(stripHtml(decoded));
+}
+
 async function fetchHtml(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const r = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Catalog-Audit/1.0)', 'accept-language': 'es-MX,es;q=0.9' }, cache: 'no-store', signal: controller.signal });
+    const r = await fetch(url, {
+      headers: {
+        'user-agent': 'Mozilla/5.0 (compatible; UFRA-Catalog-Audit/1.1)',
+        'accept-language': 'es-MX,es;q=0.9,en;q=0.8'
+      },
+      cache: 'no-store',
+      signal: controller.signal
+    });
     if (!r.ok) throw new Error(`UFRA ${r.status}`);
     return await r.text();
   } finally { clearTimeout(timeout); }
 }
+
 function supabaseConfig() {
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error('Supabase server environment variables are missing');
@@ -56,41 +85,42 @@ async function db(path) {
   if (!r.ok) throw new Error(`Supabase ${r.status}: ${text.slice(0, 200)}`);
   return text ? JSON.parse(text) : [];
 }
-async function mapLimit(items, limit, worker) {
-  const out = new Array(items.length); let next = 0;
-  async function run() { while (true) { const i = next++; if (i >= items.length) return; try { out[i] = await worker(items[i]); } catch (e) { out[i] = { error: e.message }; } } }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
-  return out;
-}
+
 export default async function handler(req, res) {
   try {
-    const first = await fetchHtml(CATEGORY_URL);
-    const catalogTotal = findCatalogTotal(first);
-    if (!catalogTotal) throw new Error('Could not detect UFRA catalog total');
-    const totalPages = Math.ceil(catalogTotal / PAGE_SIZE);
-    const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
-    const pageResults = await mapLimit(pages, CONCURRENCY, async page => {
-      const html = page === 1 ? first : await fetchHtml(`${CATEGORY_URL}?p=${page}`);
-      const links = findProductLinks(html);
-      return { page, count: links.length, links };
-    });
-    const liveLinks = [];
-    const seen = new Set();
-    const pageIssues = [];
-    for (const result of pageResults) {
-      if (!result || result.error) { pageIssues.push(result); continue; }
-      const expected = result.page < totalPages ? PAGE_SIZE : catalogTotal - PAGE_SIZE * (totalPages - 1);
-      if (result.count !== expected) pageIssues.push({ page: result.page, expected, detected: result.count });
-      for (const url of result.links) if (!seen.has(url)) { seen.add(url); liveLinks.push(url); }
-    }
-    const supplierRows = await db('supplier_products?select=supplier_sku,source_url&limit=5000');
+    const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const pageUrl = page === 1 ? CATEGORY_URL : `${CATEGORY_URL}?p=${page}`;
+    const html = await fetchHtml(pageUrl);
+    const links = findProductLinks(html);
+    if (!links.length) throw new Error(`No product links detected on UFRA page ${page}`);
+
+    const catalogTotal = findCatalogTotal(html);
+    const totalPages = catalogTotal ? Math.ceil(catalogTotal / PAGE_SIZE) : null;
+    const explicitNext = hasExplicitNextPage(html, page);
+    const hasNext = totalPages ? page < totalPages : explicitNext || links.length === PAGE_SIZE;
+
+    const supplierRows = await db('supplier_products?select=source_url&limit=5000');
     const dbUrls = new Set(supplierRows.map(r => r.source_url).filter(Boolean));
-    const liveSet = new Set(liveLinks);
-    const missingFromDb = liveLinks.filter(url => !dbUrls.has(url));
-    const noLongerLive = [...dbUrls].filter(url => !liveSet.has(url));
+    const missingFromDb = links.filter(url => !dbUrls.has(url));
+
     res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({ ok: true, catalogTotal, totalPages, detectedUniqueLinks: liveLinks.length, databaseRows: supplierRows.length, missingFromDbCount: missingFromDb.length, missingFromDb, noLongerLiveCount: noLongerLive.length, noLongerLive: noLongerLive.slice(0, 100), pageIssues });
+    res.status(200).json({
+      ok: true,
+      page,
+      source: pageUrl,
+      catalogTotal,
+      totalPages,
+      detectedLinks: links.length,
+      explicitNext,
+      hasNext,
+      databaseRows: supplierRows.length,
+      missingFromDbCount: missingFromDb.length,
+      missingFromDb,
+      links
+    });
   } catch (error) {
-    res.status(502).json({ ok: false, error: error.message });
+    const message = error?.name === 'AbortError' ? 'UFRA timed out while serving this catalog page' : error.message;
+    res.status(502).json({ ok: false, error: message });
   }
 }
