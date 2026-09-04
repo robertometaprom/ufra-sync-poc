@@ -1,8 +1,9 @@
 const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
 const PAGE_SIZE = 24;
-const CONCURRENCY = 3;
-const FETCH_TIMEOUT_MS = 18000;
-const FETCH_ATTEMPTS = 3;
+const BATCH_SIZE = 4;
+const CONCURRENCY = 2;
+const FETCH_TIMEOUT_MS = 12000;
+const FETCH_ATTEMPTS = 2;
 
 function decodeHtml(s = '') {
   return String(s)
@@ -18,7 +19,10 @@ function findProductLinks(html) {
   const links = [], seen = new Set();
   const re = /<a[^>]+class=["'][^"']*product-item-link[^"']*["'][^>]+href=["']([^"']+)["']/gi;
   let m;
-  while ((m = re.exec(html)) && links.length < PAGE_SIZE) { const url = decodeHtml(m[1]); if (!seen.has(url)) { seen.add(url); links.push(url); } }
+  while ((m = re.exec(html)) && links.length < PAGE_SIZE) {
+    const url = decodeHtml(m[1]);
+    if (!seen.has(url)) { seen.add(url); links.push(url); }
+  }
   return links;
 }
 function findCatalogTotal(html) {
@@ -28,7 +32,13 @@ function findCatalogTotal(html) {
 }
 function parseJsonLd(html) {
   const scripts = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
-  for (const match of scripts) { try { const parsed = JSON.parse(match[1].trim()); const items = Array.isArray(parsed) ? parsed : [parsed]; for (const item of items) if (item && (item['@type'] === 'Product' || item.name) && item.offers) return item; } catch {} }
+  for (const match of scripts) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) if (item && (item['@type'] === 'Product' || item.name) && item.offers) return item;
+    } catch {}
+  }
   return null;
 }
 function firstMatch(html, patterns) { for (const re of patterns) { const m = html.match(re); if (m?.[1]) return stripHtml(m[1]); } return null; }
@@ -51,7 +61,7 @@ async function fetchHtmlOnce(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.4; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
+    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.5; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new Error(`UFRA ${response.status}`);
     return await response.text();
   } finally { clearTimeout(timeout); }
@@ -60,21 +70,18 @@ async function fetchHtml(url) {
   let lastError;
   for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
     try { return await fetchHtmlOnce(url); }
-    catch (error) {
-      lastError = error;
-      if (attempt < FETCH_ATTEMPTS) await sleep(350 * attempt);
-    }
+    catch (error) { lastError = error; if (attempt < FETCH_ATTEMPTS) await sleep(300 * attempt); }
   }
   throw lastError;
 }
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length); let next = 0;
   async function run() { while (true) { const index = next++; if (index >= items.length) return; results[index] = await worker(items[index], index); } }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run)); return results;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
 }
 function supabaseConfig() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error('Supabase server environment variables are missing');
   return { url: url.replace(/\/$/, ''), key };
 }
@@ -113,11 +120,16 @@ async function syncProduct(product, supplierId, storeId) {
   else await db('store_products', { method: 'POST', prefer: 'return=minimal', body: storeRow });
   return { skipped: false, created: !existing?.[0]?.id, sku: product.sku };
 }
-async function syncPage(products, page) {
-  const supplierId = await getSingleton('suppliers', 'ufra');
-  const storeId = await getSingleton('stores', 'ufra-commerce');
-  const run = await db('sync_runs?select=id', { method: 'POST', prefer: 'return=representation', body: { supplier_id: supplierId, status: 'running', cursor_page: page } });
-  const runId = run?.[0]?.id;
+async function getOrCreateRun(supplierId, page, runId) {
+  if (runId) {
+    const rows = await db(`sync_runs?id=eq.${encodeURIComponent(runId)}&supplier_id=eq.${supplierId}&select=id,cursor_page,cursor_index,status&limit=1`);
+    if (!rows?.[0]) throw new Error('sync run not found');
+    return rows[0];
+  }
+  const created = await db('sync_runs?select=id,cursor_page,cursor_index,status', { method: 'POST', prefer: 'return=representation', body: { supplier_id: supplierId, status: 'running', cursor_page: page, cursor_index: 0 } });
+  return created?.[0];
+}
+async function syncBatch(products, page, offset, supplierId, storeId, runId, pageLinkCount) {
   const results = [];
   for (const product of products) {
     try { results.push(await syncProduct(product, supplierId, storeId)); }
@@ -125,27 +137,48 @@ async function syncPage(products, page) {
   }
   const valid = results.filter(r => !r.skipped), errors = results.filter(r => r.skipped);
   const created = valid.filter(r => r.created).length, updated = valid.length - created;
-  if (runId) await db(`sync_runs?id=eq.${runId}`, { method: 'PATCH', prefer: 'return=minimal', body: { status: errors.length ? 'completed_with_errors' : 'completed', pages_processed: 1, products_seen: products.length, products_created: created, products_updated: updated, errors: errors.length, error_details: errors.slice(0, 20), finished_at: new Date().toISOString() } });
-  return { runId, saved: valid.length, created, updated, errors: errors.length, details: errors };
+  const nextOffset = Math.min(offset + products.length, pageLinkCount);
+  const pageComplete = nextOffset >= pageLinkCount;
+  const nextPage = pageComplete ? page + 1 : page;
+  const nextIndex = pageComplete ? 0 : nextOffset;
+  await db(`sync_runs?id=eq.${runId}`, { method: 'PATCH', prefer: 'return=minimal', body: { status: pageComplete ? 'page_complete' : 'running', cursor_page: nextPage, cursor_index: nextIndex, pages_processed: pageComplete ? 1 : 0, products_seen: nextOffset, products_created: created, products_updated: updated, errors: errors.length, error_details: errors.slice(0, 20), finished_at: pageComplete ? new Date().toISOString() : null } });
+  return { runId, saved: valid.length, created, updated, errors: errors.length, page, offset, nextPage, nextIndex, pageComplete, batchSize: products.length, details: errors };
 }
 export default async function handler(req, res) {
   try {
     const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
     const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const shouldSync = String(req.query?.sync || '') === '1';
+    const requestedOffset = Number.parseInt(String(req.query?.offset || '0'), 10);
     const pageUrl = page === 1 ? CATEGORY_URL : `${CATEGORY_URL}?p=${page}`;
     const categoryHtml = await fetchHtml(pageUrl);
     const links = findProductLinks(categoryHtml);
     const catalogTotal = findCatalogTotal(categoryHtml);
     const totalPages = catalogTotal ? Math.ceil(catalogTotal / PAGE_SIZE) : null;
     if (!links.length) throw new Error('No product links detected on UFRA category page');
-    const products = await mapWithConcurrency(links, CONCURRENCY, async (url) => {
+
+    let selectedLinks = links;
+    let offset = 0;
+    let runId = null;
+    let supplierId = null;
+    let storeId = null;
+    if (shouldSync) {
+      supplierId = await getSingleton('suppliers', 'ufra');
+      storeId = await getSingleton('stores', 'ufra-commerce');
+      const run = await getOrCreateRun(supplierId, page, String(req.query?.runId || '') || null);
+      runId = run.id;
+      offset = String(req.query?.offset || '') ? Math.max(0, requestedOffset) : Math.max(0, Number(run.cursor_page) === page ? Number(run.cursor_index || 0) : 0);
+      selectedLinks = links.slice(offset, offset + BATCH_SIZE);
+    }
+
+    const products = await mapWithConcurrency(selectedLinks, CONCURRENCY, async (url) => {
       try { const html = await fetchHtml(url); const product = parseProduct(html, url); return { ...product, salePrice: applyMargin(product.supplierPrice), syncedAt: new Date().toISOString() }; }
       catch (error) { const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder después de reintentos' : error.message; return { sourceUrl: url, error: message }; }
     });
-    const databaseSync = shouldSync ? await syncPage(products, page) : null;
+
+    const databaseSync = shouldSync ? await syncBatch(products, page, offset, supplierId, storeId, runId, links.length) : null;
     res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({ ok: true, source: pageUrl, page, pageSize: PAGE_SIZE, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext: totalPages ? page < totalPages : products.length === PAGE_SIZE, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', databaseSync, products });
+    res.status(200).json({ ok: true, mode: shouldSync ? 'batch-sync' : 'browse', source: pageUrl, page, pageSize: PAGE_SIZE, batchSize: shouldSync ? BATCH_SIZE : null, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext: totalPages ? page < totalPages : links.length === PAGE_SIZE, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', databaseSync, products });
   } catch (error) {
     const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder después de reintentos' : error.message;
     res.status(502).json({ ok: false, error: message });
