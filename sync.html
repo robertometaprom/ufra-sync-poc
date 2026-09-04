@@ -19,6 +19,7 @@
 <body>
   <h1>UFRA Catalog Sync</h1>
   <p>Un clic inicia la sincronización completa. El navegador encadena automáticamente batches pequeños y reanudables.</p>
+  <p id="resumeNote"></p>
   <button id="start">Iniciar sincronización completa</button>
   <button id="stop" disabled>Detener después del batch actual</button>
 
@@ -48,6 +49,11 @@ const errorsEl = document.getElementById('errors');
 const runIdEl = document.getElementById('runId');
 const progressEl = document.getElementById('progress');
 const logEl = document.getElementById('log');
+const resumeNote = document.getElementById('resumeNote');
+const qs = new URLSearchParams(location.search);
+const requestedStartPage = Math.max(1, Number.parseInt(qs.get('startPage') || '1', 10) || 1);
+if (requestedStartPage > 1) resumeNote.textContent = `Reanudación configurada desde la página ${requestedStartPage}.`;
+
 let stopRequested = false;
 let running = false;
 let processed = 0;
@@ -79,9 +85,11 @@ async function runAll() {
   statusEl.textContent = 'Sincronizando';
   logEl.textContent = '';
 
-  let page = 1;
+  let page = requestedStartPage;
   let runId = null;
   let consecutiveFailures = 0;
+  const initialBase = (requestedStartPage - 1) * 24;
+  log(`Inicio desde página ${requestedStartPage}.`);
 
   try {
     while (!stopRequested) {
@@ -110,7 +118,7 @@ async function runAll() {
       const total = data.catalogTotal;
       if (total) {
         progressEl.max = total;
-        progressEl.value = Math.min(processed, total);
+        progressEl.value = Math.min(initialBase + processed, total);
       } else {
         progressEl.max = 100;
         progressEl.value = ((dbs.offset + dbs.batchSize) / data.pageSize) * 100;
