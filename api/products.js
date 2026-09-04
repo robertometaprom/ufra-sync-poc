@@ -26,9 +26,19 @@ function findProductLinks(html) {
   return links;
 }
 function findCatalogTotal(html) {
-  const matches = [...html.matchAll(/Artículos\s+[\d,]+-[\d,]+\s+de\s+([\d,]+)/gi)];
-  if (!matches.length) return null;
-  return Number(matches[0][1].replace(/,/g, '')) || null;
+  // Decode/strip first because Magento may render í as an HTML entity.
+  const text = stripHtml(html);
+  const match = text.match(/Art[ií]culos\s+[\d,]+-[\d,]+\s+de\s+([\d,]+)/i);
+  if (!match) return null;
+  return Number(match[1].replace(/,/g, '')) || null;
+}
+function hasExplicitNextPage(html, page) {
+  const decoded = decodeHtml(html);
+  const nextPage = page + 1;
+  // Magento paginator links include ?p=N or &p=N. Do not infer the end from product count.
+  const pageHref = new RegExp(`href=["'][^"']*(?:\\?|&)p=${nextPage}(?:&[^"']*)?["']`, 'i');
+  if (pageHref.test(decoded)) return true;
+  return /class=["'][^"']*action\s+next[^"']*["']/i.test(decoded) && /Página\s+Siguiente|Siguiente/i.test(stripHtml(decoded));
 }
 function parseJsonLd(html) {
   const scripts = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
@@ -61,7 +71,7 @@ async function fetchHtmlOnce(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.5; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
+    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; UFRA-Sync-POC/1.6; +merchant-catalog-test)', 'accept-language': 'es-MX,es;q=0.9,en;q=0.8' }, cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new Error(`UFRA ${response.status}`);
     return await response.text();
   } finally { clearTimeout(timeout); }
@@ -155,6 +165,7 @@ export default async function handler(req, res) {
     const links = findProductLinks(categoryHtml);
     const catalogTotal = findCatalogTotal(categoryHtml);
     const totalPages = catalogTotal ? Math.ceil(catalogTotal / PAGE_SIZE) : null;
+    const explicitNext = hasExplicitNextPage(categoryHtml, page);
     if (!links.length) throw new Error('No product links detected on UFRA category page');
 
     let selectedLinks = links;
@@ -177,8 +188,9 @@ export default async function handler(req, res) {
     });
 
     const databaseSync = shouldSync ? await syncBatch(products, page, offset, supplierId, storeId, runId, links.length) : null;
+    const hasNext = totalPages ? page < totalPages : explicitNext;
     res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({ ok: true, mode: shouldSync ? 'batch-sync' : 'browse', source: pageUrl, page, pageSize: PAGE_SIZE, batchSize: shouldSync ? BATCH_SIZE : null, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext: totalPages ? page < totalPages : links.length === PAGE_SIZE, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', databaseSync, products });
+    res.status(200).json({ ok: true, mode: shouldSync ? 'batch-sync' : 'browse', source: pageUrl, page, pageSize: PAGE_SIZE, batchSize: shouldSync ? BATCH_SIZE : null, catalogTotal, totalPages, count: products.length, hasPrevious: page > 1, hasNext, explicitNext, pricingRule: '<500 +45%; 500-1000 +35%; >1000 +25%; rounded up to MXN 10', databaseSync, products });
   } catch (error) {
     const message = error?.name === 'AbortError' ? 'UFRA tardó demasiado en responder después de reintentos' : error.message;
     res.status(502).json({ ok: false, error: message });
