@@ -1,0 +1,5 @@
+{
+  "version": 2,
+  "functions": { "api/products.js": { "maxDuration": 60 } },
+  "rewrites": [{ "source": "/", "destination": "/index.html" }]
+}
