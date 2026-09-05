@@ -16,6 +16,8 @@ async function db(path) {
   return text ? JSON.parse(text) : null;
 }
 
+const MIN_VISIBLE_PRICE = 500;
+
 function roundUp(value, roundTo) {
   const step = Number(roundTo) > 0 ? Number(roundTo) : 1;
   return Math.ceil(Number(value) / step) * step;
@@ -46,9 +48,11 @@ export default async function handler(req, res) {
     const rule = rules?.[0];
     if (!rule) throw new Error('No active pricing rule configured');
 
-    const rows = await db(`store_products?store_id=eq.${storeId}&published=eq.true&select=id,product_id,supplier_product_id,products(canonical_name,brand,image_url),supplier_products(supplier_sku,supplier_price,supplier_list_price,in_stock,source_url)&order=updated_at.desc&offset=${offset}&limit=${limit}`);
+    const select='id,product_id,supplier_product_id,products(canonical_name,brand,image_url),supplier_products(supplier_sku,supplier_price,supplier_list_price,in_stock,source_url)';
+    const pages=await Promise.all([0,1000].map(dbOffset=>db(`store_products?store_id=eq.${storeId}&published=eq.true&select=${select}&order=updated_at.desc&offset=${dbOffset}&limit=1000`)));
+    const allRows=pages.flat();
 
-    const products = (rows || []).map(row => {
+    const visible = (allRows || []).map(row => {
       const product = Array.isArray(row.products) ? row.products[0] : row.products;
       const supplier = Array.isArray(row.supplier_products) ? row.supplier_products[0] : row.supplier_products;
       const priced = priceProduct(supplier?.supplier_price, supplier?.supplier_list_price, rule);
@@ -63,7 +67,9 @@ export default async function handler(req, res) {
         compareAtPrice: priced.compareAtPrice,
         currency: 'MXN'
       };
-    });
+    }).filter(p => p.salePrice != null && p.salePrice >= MIN_VISIBLE_PRICE);
+
+    const products=visible.slice(offset,offset+limit);
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
