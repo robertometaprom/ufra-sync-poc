@@ -22,19 +22,37 @@
   <pre id="log"></pre>
 <script>
 (() => {
+  const CHECKPOINT_KEY = 'ufra-list-price-backfill-v1';
   const qs = new URLSearchParams(location.search);
-  let page = Math.max(1, Number(qs.get('startPage') || 1));
+  const saved = (() => { try { return JSON.parse(localStorage.getItem(CHECKPOINT_KEY) || 'null'); } catch { return null; } })();
+  const requestedStart = Number(qs.get('startPage'));
+  let page = Number.isFinite(requestedStart) && requestedStart > 0
+    ? requestedStart
+    : Math.max(1, Number(saved?.nextPage || 1));
   let stop = false;
   let running = false;
-  let totalUpdated = 0, totalMatched = 0, totalMissing = 0, totalNoList = 0;
+  let totalUpdated = Number(saved?.totalUpdated || 0);
+  let totalMatched = Number(saved?.totalMatched || 0);
+  let totalMissing = Number(saved?.totalMissing || 0);
+  let totalNoList = Number(saved?.totalNoList || 0);
   const status = document.getElementById('status');
   const stats = document.getElementById('stats');
   const log = document.getElementById('log');
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const line = s => { log.textContent += s + '\n'; log.scrollTop = log.scrollHeight; };
+  const saveCheckpoint = () => {
+    localStorage.setItem(CHECKPOINT_KEY, JSON.stringify({
+      nextPage: page,
+      totalUpdated,
+      totalMatched,
+      totalMissing,
+      totalNoList,
+      savedAt: new Date().toISOString()
+    }));
+  };
   const render = () => {
-    status.textContent = running ? `Procesando página ${page}...` : `Página actual: ${page}`;
-    stats.textContent = `Actualizados: ${totalUpdated} · Coincidencias: ${totalMatched} · Faltantes DB: ${totalMissing} · Sin Precio habitual: ${totalNoList}`;
+    status.textContent = running ? `Procesando página ${page}...` : `Listo para continuar en página ${page}.`;
+    stats.textContent = `Actualizados acumulados: ${totalUpdated} · Coincidencias: ${totalMatched} · Faltantes DB: ${totalMissing} · Sin Precio habitual: ${totalNoList}`;
   };
   async function callPage(p) {
     let lastErr;
@@ -57,20 +75,21 @@
     running = true; stop = false; render();
     while (!stop && page <= 100) {
       try {
-        const data = await callPage(page);
+        const currentPage = page;
+        const data = await callPage(currentPage);
         totalUpdated += data.updated || 0;
         totalMatched += data.matched || 0;
         totalMissing += data.missingInDb || 0;
         totalNoList += data.noListPrice || 0;
-        line(`Página ${page}: detectados ${data.detected}, actualizados ${data.updated}, faltantes ${data.missingInDb}, sin habitual ${data.noListPrice}`);
+        line(`Página ${currentPage}: detectados ${data.detected}, actualizados ${data.updated}, faltantes ${data.missingInDb}, sin habitual ${data.noListPrice}`);
         const detected = Number(data.detected || 0);
+        page = currentPage + 1;
+        saveCheckpoint();
+        render();
         if (detected < 24) {
-          line(`FIN: página ${page} tuvo ${detected} productos; catálogo terminado.`);
-          page++;
+          line(`FIN: página ${currentPage} tuvo ${detected} productos; catálogo terminado.`);
           break;
         }
-        page++;
-        render();
         await sleep(250);
       } catch (e) {
         if (/No UFRA product cards detected/i.test(e.message)) {
@@ -78,14 +97,18 @@
           break;
         }
         line(`DETENIDO en página ${page}: ${e.message}`);
+        saveCheckpoint();
         break;
       }
     }
-    running = false; render();
-    if (stop) line(`Detenido por usuario. Para reanudar: ?startPage=${page}`);
+    running = false; saveCheckpoint(); render();
+    if (stop) line(`Detenido por usuario. El checkpoint quedó guardado; reanudará en página ${page}.`);
   }
   document.getElementById('start').onclick = run;
   document.getElementById('stop').onclick = () => { stop = true; line('Se detendrá al terminar la página actual.'); };
+  if (saved && !(Number.isFinite(requestedStart) && requestedStart > 0)) {
+    line(`Checkpoint recuperado: próxima página ${page}.`);
+  }
   render();
 })();
 </script>
