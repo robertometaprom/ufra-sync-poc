@@ -13,9 +13,7 @@ function moneyToNumber(value) {
   if (value == null) return null;
   const cleaned = String(value).replace(/[^0-9.,-]/g, '').trim();
   if (!cleaned) return null;
-  const normalized = cleaned.includes(',') && cleaned.includes('.')
-    ? cleaned.replace(/,/g, '')
-    : cleaned.replace(/,/g, '');
+  const normalized = cleaned.replace(/,/g, '');
   const n = Number(normalized);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
@@ -58,12 +56,24 @@ function parseCards(html) {
       || block.match(/class=["'][^"']*special-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1]
       || extractTextPrice(block, /Precio especial/i);
 
-    const supplierListPrice = moneyToNumber(oldPriceRaw);
-    const supplierPrice = moneyToNumber(finalPriceRaw);
-    cards.push({ url, supplierListPrice, supplierPrice });
+    cards.push({
+      url,
+      supplierListPrice: moneyToNumber(oldPriceRaw),
+      supplierPrice: moneyToNumber(finalPriceRaw)
+    });
   }
 
   return cards;
+}
+
+function hasExplicitNextPage(html, page) {
+  const decoded = decodeHtml(html);
+  const nextPage = page + 1;
+  const escaped = String(nextPage).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`href=["'][^"']*[?&]p=${escaped}(?:[&#"']|$)`, 'i').test(decoded)) return true;
+  if (/class=["'][^"']*action\s+next[^"']*["']/i.test(decoded)) return true;
+  if (/title=["']Siguiente["']/i.test(decoded)) return true;
+  return false;
 }
 
 async function fetchHtml(url) {
@@ -72,7 +82,7 @@ async function fetchHtml(url) {
   try {
     const r = await fetch(url, {
       headers: {
-        'user-agent': 'Mozilla/5.0 (compatible; UFRA-ListPrice-Backfill/1.1)',
+        'user-agent': 'Mozilla/5.0 (compatible; UFRA-ListPrice-Backfill/1.2)',
         'accept-language': 'es-MX,es;q=0.9'
       },
       cache: 'no-store',
@@ -115,6 +125,7 @@ export default async function handler(req, res) {
     const html = await fetchHtml(pageUrl);
     const cards = parseCards(html);
     if (!cards.length) throw new Error('No UFRA product cards detected');
+    const hasNext = hasExplicitNextPage(html, page);
 
     let matched = 0;
     let updated = 0;
@@ -150,6 +161,7 @@ export default async function handler(req, res) {
       source: pageUrl,
       write,
       detected: cards.length,
+      hasNext,
       matched,
       updated,
       missingInDb,
