@@ -9,32 +9,60 @@ function decodeHtml(s = '') {
     .replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>');
 }
 
-function moneyToNumber(value = '') {
-  const n = Number(String(value).replace(/[^0-9.]/g, ''));
-  return Number.isFinite(n) ? n : null;
+function moneyToNumber(value) {
+  if (value == null) return null;
+  const cleaned = String(value).replace(/[^0-9.,-]/g, '').trim();
+  if (!cleaned) return null;
+  const normalized = cleaned.includes(',') && cleaned.includes('.')
+    ? cleaned.replace(/,/g, '')
+    : cleaned.replace(/,/g, '');
+  const n = Number(normalized);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function extractDataPrice(block, type) {
+  const tags = block.match(/<[^>]+data-price-type=["'][^"']+["'][^>]*>/gi) || [];
+  for (const tag of tags) {
+    const typeMatch = tag.match(/data-price-type=["']([^"']+)["']/i)?.[1];
+    if (typeMatch !== type) continue;
+    const amount = tag.match(/data-price-amount=["']([^"']+)["']/i)?.[1];
+    if (amount != null) return amount;
+  }
+  return null;
+}
+
+function extractTextPrice(block, labelRegex) {
+  const text = decodeHtml(block.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '));
+  return text.match(new RegExp(`${labelRegex.source}\\s*\\$?\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)`, 'i'))?.[1] || null;
 }
 
 function parseCards(html) {
   const decoded = decodeHtml(html);
   const cards = [];
   const blocks = [...decoded.matchAll(/<li[^>]*class=["'][^"']*product-item[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)];
+
   for (const match of blocks) {
     const block = match[1];
     const link = block.match(/<a[^>]+class=["'][^"']*product-item-link[^"']*["'][^>]+href=["']([^"']+)["']/i)?.[1]
       || block.match(/<a[^>]+href=["'](https?:\/\/ufra\.com\.mx\/[^"'#?]+\.html)["']/i)?.[1];
     if (!link) continue;
+
     const url = decodeHtml(link).split('#')[0];
     if (/\/categorias\//i.test(url) || /\/catalogos(?:\/|\.html)/i.test(url)) continue;
 
-    const oldPriceRaw = block.match(/data-price-type=["']oldPrice["'][\s\S]{0,300}?data-price-amount=["']([^"']+)["']/i)?.[1]
-      || block.match(/class=["'][^"']*old-price[^"']*["'][\s\S]{0,500}?<span[^>]*class=["'][^"']*price[^"']*["'][^>]*>([^<]+)<\/span>/i)?.[1];
-    const finalPriceRaw = block.match(/data-price-type=["']finalPrice["'][\s\S]{0,300}?data-price-amount=["']([^"']+)["']/i)?.[1]
-      || block.match(/class=["'][^"']*special-price[^"']*["'][\s\S]{0,500}?<span[^>]*class=["'][^"']*price[^"']*["'][^>]*>([^<]+)<\/span>/i)?.[1];
+    const oldPriceRaw = extractDataPrice(block, 'oldPrice')
+      || block.match(/class=["'][^"']*old-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1]
+      || extractTextPrice(block, /Precio habitual/i);
+
+    const finalPriceRaw = extractDataPrice(block, 'finalPrice')
+      || block.match(/class=["'][^"']*special-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1]
+      || extractTextPrice(block, /Precio especial/i);
 
     const supplierListPrice = moneyToNumber(oldPriceRaw);
     const supplierPrice = moneyToNumber(finalPriceRaw);
     cards.push({ url, supplierListPrice, supplierPrice });
   }
+
   return cards;
 }
 
@@ -44,7 +72,7 @@ async function fetchHtml(url) {
   try {
     const r = await fetch(url, {
       headers: {
-        'user-agent': 'Mozilla/5.0 (compatible; UFRA-ListPrice-Backfill/1.0)',
+        'user-agent': 'Mozilla/5.0 (compatible; UFRA-ListPrice-Backfill/1.1)',
         'accept-language': 'es-MX,es;q=0.9'
       },
       cache: 'no-store',
@@ -103,6 +131,7 @@ export default async function handler(req, res) {
         details.push({ url: card.url, status: 'missing_in_db', supplierListPrice: card.supplierListPrice, supplierPrice: card.supplierPrice });
         continue;
       }
+
       matched++;
       if (write && card.supplierListPrice != null) {
         const body = { supplier_list_price: card.supplierListPrice };
@@ -110,6 +139,7 @@ export default async function handler(req, res) {
         await db(`supplier_products?id=eq.${row.id}`, { method: 'PATCH', prefer: 'return=minimal', body });
         updated++;
       }
+
       details.push({ url: card.url, status: write ? 'updated' : 'matched', supplierListPrice: card.supplierListPrice, supplierPrice: card.supplierPrice });
     }
 
