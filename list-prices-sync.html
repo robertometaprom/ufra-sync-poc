@@ -81,13 +81,12 @@
         totalMatched += data.matched || 0;
         totalMissing += data.missingInDb || 0;
         totalNoList += data.noListPrice || 0;
-        line(`Página ${currentPage}: detectados ${data.detected}, actualizados ${data.updated}, faltantes ${data.missingInDb}, sin habitual ${data.noListPrice}`);
-        const detected = Number(data.detected || 0);
+        line(`Página ${currentPage}: detectados ${data.detected}, actualizados ${data.updated}, faltantes ${data.missingInDb}, sin habitual ${data.noListPrice}, siguiente ${data.hasNext ? 'sí' : 'no'}`);
         page = currentPage + 1;
         saveCheckpoint();
         render();
-        if (detected < 24) {
-          line(`FIN: página ${currentPage} tuvo ${detected} productos; catálogo terminado.`);
+        if (data.hasNext === false) {
+          line(`FIN confirmado: UFRA no publica página siguiente después de la ${currentPage}.`);
           break;
         }
         await sleep(250);
