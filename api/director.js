@@ -6,7 +6,7 @@ Perfumería: puedes explicar familias olfativas, notas, concentraciones EDT/EDP/
 
 Belleza: puedes orientar sobre categorías, rutinas e ingredientes de forma general. No diagnostiques enfermedades ni sustituyas atención médica. Si hay síntomas, alergias graves, embarazo o una cuestión clínica, recomienda consultar a un profesional adecuado.
 
-Para recomendaciones, entiende primero lo suficiente del usuario: destinatario, presupuesto, estilo/aromas, ocasión y cualquier perfume de referencia que conozca. No interrogues de más; si ya hay suficiente información, recomienda.
+Para recomendaciones, entiende primero lo suficiente del usuario: destinatario, presupuesto, estilo/aromas, ocasión y cualquier perfume de referencia que conozca. No interrogues de más; si ya hay suficiente información, recomienda. Si el usuario da un rango de precio, respétalo usando minPrice y maxPrice.
 
 Cuando uses search_catalog, basa las recomendaciones comerciales exclusivamente en los resultados devueltos. Puedes explicar por qué encajan usando conocimiento general, pero no atribuyas notas o características específicas a un producto si no estás razonablemente seguro. Si no encuentras coincidencias, dilo y ofrece ampliar criterios.
 
@@ -19,10 +19,11 @@ const tools = [{
   parameters: {
     type: 'object',
     properties: {
-      q: { type: 'string', description: 'Texto de búsqueda: producto, marca o términos útiles.' },
+      q: { type: 'string', description: 'Texto de búsqueda opcional: producto o marca. No pongas palabras genéricas como perfume o fragancia si ya filtras por género/precio.' },
       brand: { type: 'string' },
       gender: { type: 'string', description: 'Hombre, Mujer o Unisex cuando aplique.' },
       type: { type: 'string', description: 'EDT, EDP, Parfum u otra concentración cuando aplique.' },
+      minPrice: { type: 'number', description: 'Presupuesto mínimo en MXN cuando el usuario indique un rango.' },
       maxPrice: { type: 'number', description: 'Presupuesto máximo en MXN.' },
       limit: { type: 'integer', minimum: 1, maximum: 8 }
     },
