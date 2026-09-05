@@ -3,7 +3,8 @@
   "functions": {
     "api/products.js": { "maxDuration": 60 },
     "api/verify-cart.js": { "maxDuration": 60 },
-    "api/create-order.js": { "maxDuration": 60 }
+    "api/create-order.js": { "maxDuration": 60 },
+    "api/home.js": { "maxDuration": 60 }
   },
-  "rewrites": [{ "source": "/", "destination": "/index.html" }]
+  "rewrites": [{ "source": "/", "destination": "/api/home" }]
 }
