@@ -12,7 +12,7 @@ async function db(path) {
   const text=await r.text(); return text?JSON.parse(text):null;
 }
 
-const MIN_VISIBLE_PRICE = 500;
+const MIN_VISIBLE_PRICE = 301;
 function roundUp(value,step){const s=Number(step)>0?Number(step):1;return Math.ceil(Number(value)/s)*s}
 function salePrice(cost,rule){return cost==null?null:roundUp(Number(cost)*Number(rule.multiplier||1)+Number(rule.fixed_markup||0),rule.round_to||1)}
 function norm(v){return String(v||'').trim().toLowerCase()}
