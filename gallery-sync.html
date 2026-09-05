@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>UFRA Gallery Backfill</title>
+  <style>
+    body{font-family:Arial,sans-serif;max-width:960px;margin:40px auto;padding:0 20px;line-height:1.45}
+    button{padding:10px 16px;margin:0 8px 8px 0;cursor:pointer}
+    .row{margin:14px 0}.muted{color:#666}pre{background:#f5f5f5;padding:14px;white-space:pre-wrap;max-height:420px;overflow:auto}
+    .ok{color:#087a28}.warn{color:#9a6700}
+  </style>
+</head>
+<body>
+  <h1>UFRA · Backfill de galerías HD</h1>
+  <p>Extrae las imágenes publicadas en la ficha individual de cada producto UFRA y las guarda en <code>product_images</code>. El proceso es reanudable.</p>
+  <div class="row">
+    <button id="test">Probar 3 productos</button>
+    <button id="start">Iniciar / Reanudar backfill</button>
+    <button id="stop">Detener después del lote actual</button>
+    <button id="reset">Reiniciar checkpoint</button>
+  </div>
+  <div id="status" class="row">Listo.</div>
+  <div id="stats" class="row muted"></div>
+  <pre id="log"></pre>
+<script>
+(() => {
+  const KEY='ufra-gallery-backfill-v1';
+  const BATCH=5;
+  let state=(()=>{try{return JSON.parse(localStorage.getItem(KEY)||'null')}catch{return null}})() || {offset:0,processed:0,images:0,empty:0,errors:0};
+  let running=false, stop=false;
+  const status=document.getElementById('status'), stats=document.getElementById('stats'), log=document.getElementById('log');
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  const line=s=>{log.textContent+=s+'\n';log.scrollTop=log.scrollHeight};
+  const save=()=>localStorage.setItem(KEY,JSON.stringify({...state,savedAt:new Date().toISOString()}));
+  function render(){
+    status.textContent=running?`Procesando desde offset ${state.offset}...`:`Listo para continuar desde offset ${state.offset}.`;
+    stats.textContent=`Productos procesados: ${state.processed} · Imágenes encontradas: ${state.images} · Sin galería: ${state.empty} · Errores: ${state.errors}`;
+  }
+  async function call(limit,offset,write){
+    let last;
+    for(let a=1;a<=3;a++){
+      try{
+        const r=await fetch(`/api/product-images?limit=${limit}&offset=${offset}&write=${write?1:0}`,{cache:'no-store'});
+        const d=await r.json().catch(()=>({ok:false,error:`HTTP ${r.status}`}));
+        if(!r.ok||!d.ok)throw new Error(d.error||`HTTP ${r.status}`);
+        return d;
+      }catch(e){last=e;line(`Intento ${a} falló: ${e.message}`);if(a<3)await sleep(1500*a)}
+    }
+    throw last;
+  }
+  async function test(){
+    if(running)return; running=true; render();
+    try{
+      const d=await call(3,0,false);
+      line('PRUEBA 3 PRODUCTOS:');
+      for(const r of d.results||[]){
+        line(`SKU ${r.sku}: ${r.count||0} imágenes${r.error?` · ERROR ${r.error}`:''}`);
+        for(const u of (r.images||[]).slice(0,8)) line(`  ${u}`);
+      }
+    }catch(e){line(`PRUEBA FALLÓ: ${e.message}`)}
+    running=false;render();
+  }
+  async function run(){
+    if(running)return; running=true;stop=false;render();
+    while(!stop){
+      try{
+        const current=state.offset;
+        const d=await call(BATCH,current,true);
+        const results=d.results||[];
+        if(!results.length){line(`FIN: no hay más productos desde offset ${current}.`);break}
+        let imgs=0,empty=0,errs=0;
+        for(const r of results){imgs+=r.count||0;if(r.error)errs++;else if(!r.count)empty++}
+        state.processed+=results.length; state.images+=imgs; state.empty+=empty; state.errors+=errs; state.offset=current+results.length;
+        save();render();
+        line(`Offset ${current}: ${results.length} productos · ${imgs} imágenes · ${empty} sin galería · ${errs} errores.`);
+        if(results.length<BATCH){line('FIN: último lote confirmado.');break}
+        await sleep(300);
+      }catch(e){line(`DETENIDO en offset ${state.offset}: ${e.message}`);save();break}
+    }
+    running=false;save();render();if(stop)line(`Detenido. Checkpoint guardado en offset ${state.offset}.`);
+  }
+  document.getElementById('test').onclick=test;
+  document.getElementById('start').onclick=run;
+  document.getElementById('stop').onclick=()=>{stop=true;line('Se detendrá al terminar el lote actual.')};
+  document.getElementById('reset').onclick=()=>{if(running)return;state={offset:0,processed:0,images:0,empty:0,errors:0};save();line('Checkpoint reiniciado.');render()};
+  line(`Checkpoint recuperado: offset ${state.offset}.`);render();
+})();
+</script>
+</body>
+</html>
