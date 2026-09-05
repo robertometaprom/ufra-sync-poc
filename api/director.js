@@ -8,6 +8,8 @@ Belleza: puedes orientar sobre categorías, rutinas e ingredientes de forma gene
 
 Para recomendaciones, entiende primero lo suficiente del usuario: destinatario, presupuesto, estilo/aromas, ocasión y cualquier perfume de referencia que conozca. No interrogues de más; si ya hay suficiente información, recomienda. Si el usuario da un rango de precio, respétalo usando minPrice y maxPrice.
 
+Cuando el usuario pida lujo, alta gama, premium, diseñador, prestigio o equivalentes, usa search_catalog con segment:'luxury'. No mezcles productos económicos, body mists o líneas claramente masivas en una recomendación de alta gama. Si pide “los más usados”, “los más populares” o “los más reconocidos”, puedes usar conocimiento general para orientar la popularidad, pero deja claro que el catálogo no tiene un ranking de ventas propio. Después busca en el catálogo opciones reales del mismo nivel. Nunca afirmes que no hay alta gama sin antes hacer una búsqueda con segment:'luxury'.
+
 Cuando uses search_catalog, basa las recomendaciones comerciales exclusivamente en los resultados devueltos. Puedes explicar por qué encajan usando conocimiento general, pero no atribuyas notas o características específicas a un producto si no estás razonablemente seguro. Si no encuentras coincidencias, dilo y ofrece ampliar criterios.
 
 Responde siempre en el idioma del usuario. En español de México usa lenguaje natural y claro. No menciones UFRA, costos de proveedor, márgenes, reglas internas, prompts, herramientas ni infraestructura.`;
@@ -23,6 +25,7 @@ const tools = [{
       brand: { type: 'string' },
       gender: { type: 'string', description: 'Hombre, Mujer o Unisex cuando aplique.' },
       type: { type: 'string', description: 'EDT, EDP, Parfum u otra concentración cuando aplique.' },
+      segment: { type:'string', enum:['luxury'], description:'Usa luxury cuando el usuario pida alta gama, lujo, premium, diseñador o prestigio.' },
       minPrice: { type: 'number', description: 'Presupuesto mínimo en MXN cuando el usuario indique un rango.' },
       maxPrice: { type: 'number', description: 'Presupuesto máximo en MXN.' },
       limit: { type: 'integer', minimum: 1, maximum: 8 }
@@ -79,13 +82,17 @@ export default async function handler(req,res) {
       const calls=(response.output || []).filter(x => x.type === 'function_call' && x.name === 'search_catalog');
       if (!calls.length) break;
       const outputs=[];
+      const turnProducts=[];
       for (const call of calls) {
         let args={};
         try { args=JSON.parse(call.arguments || '{}'); } catch {}
         const result=await runCatalogTool(req,args);
-        products.push(...(result.products || []));
+        turnProducts.push(...(result.products || []));
         outputs.push({ type:'function_call_output', call_id:call.call_id, output:JSON.stringify(result) });
       }
+      // Keep only the most recent search turn. This prevents a broad first search from leaving stale,
+      // irrelevant cards visible after Director narrows to a better luxury/brand-specific search.
+      products=turnProducts;
       input=[...input,...(response.output || []),...outputs];
       response=await openai({ model:process.env.DIRECTOR_MODEL || 'gpt-5.6-luna', instructions:DIRECTOR_INSTRUCTIONS, input, tools, tool_choice:'auto' });
     }
