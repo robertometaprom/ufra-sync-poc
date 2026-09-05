@@ -16,7 +16,7 @@ async function db(path) {
   return text ? JSON.parse(text) : null;
 }
 
-const MIN_VISIBLE_PRICE = 500;
+const MIN_VISIBLE_PRICE = 301;
 
 function roundUp(value, roundTo) {
   const step = Number(roundTo) > 0 ? Number(roundTo) : 1;
