@@ -24,24 +24,31 @@ export default async function handler(req,res) {
 </style>
 <script>
 try {
-  // The two panes make product-driven auto-scrolling unnecessary.
+  // Product cards never control conversation scrolling.
   bottom = function(){};
 
-  // Keep SAX wide on desktop so recommendations have room, without changing width mid-answer.
   const originalOpenSax = openSax;
   openSax = function(){
     originalOpenSax();
     if (innerWidth > 1180) document.body.classList.add('sax-expanded');
   };
 
-  // Create a physically separate recommendation pane below the conversation.
   const recPane = document.createElement('section');
   recPane.className = 'sax-recommendations';
   recPane.setAttribute('aria-label','Opciones recomendadas por SAX');
   body.appendChild(recPane);
 
-  // Do not reposition the conversation when messages arrive. They append chronologically
-  // and the user continues naturally downward, just like a normal chat.
+  // Preserve natural downward chronology, but when a NEW message is appended keep the
+  // conversation at its newest content. This never scrolls upward and products cannot move it.
+  const originalAddMsg = addMsg;
+  addMsg = function(role,text,turn){
+    const m = originalAddMsg(role,text,turn);
+    requestAnimationFrame(() => {
+      const feed = document.querySelector('.sax-feed');
+      if (feed) feed.scrollTop = feed.scrollHeight;
+    });
+    return m;
+  };
 
   const originalAddProducts = addProducts;
   addProducts = function(items,turn){
@@ -50,10 +57,10 @@ try {
     const block = turn.querySelector('.turn-products');
     if (!block) return;
 
-    // Only the newest recommendation set is shown below. It cannot move the conversation.
     recPane.innerHTML = '<div class="sax-recommendations-title">Opciones para ti</div>';
     recPane.appendChild(block);
     recPane.scrollTop = 0;
+    // Deliberately do not touch conversation scroll here.
   };
 } catch (e) { console.error('SAX two-pane layout', e); }
 </script>
