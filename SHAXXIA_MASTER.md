@@ -119,6 +119,16 @@ Pricing:
 - Compare-at price only if supplier list price >= sale price * 1.10
 - Customer-facing APIs must never expose supplier cost / supplier_price
 
+Traditional storefront search — working:
+- The visible storefront search bar now searches the full visible catalog, not only the current 24-product page.
+- Search matches product name, brand and supplier SKU.
+- Search is case-insensitive and accent-insensitive.
+- Search stays paginated at 24 products per page.
+- `api/catalog.js` accepts `q` and applies search before pagination while preserving the existing customer-visible price floor.
+- No new Vercel serverless function was added.
+- `api/home.js` surgically upgrades the existing search runtime rather than editing the large embedded-image `index.html`.
+- Relevant commits: `b563eddf632252b23281db11979fa9a0e2b1e115` (global catalog query) and `53d9c7e5c78d03530d813d4c7bf2f66d9f33c980` (storefront search wiring); final Vercel deployment status: success.
+
 Desired filters:
 - Hombre / Mujer / Unisex
 - Marca
