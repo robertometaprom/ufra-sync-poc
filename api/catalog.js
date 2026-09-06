@@ -33,12 +33,17 @@ function priceProduct(cost, listPrice, rule) {
   return { salePrice, compareAtPrice };
 }
 
+function searchText(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
 export default async function handler(req, res) {
   try {
     const requestedLimit = Number.parseInt(String(req.query?.limit || '24'), 10);
     const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 24));
     const requestedOffset = Number.parseInt(String(req.query?.offset || '0'), 10);
     const offset = Math.max(0, Number.isFinite(requestedOffset) ? requestedOffset : 0);
+    const q = searchText(req.query?.q);
 
     const stores = await db('stores?slug=eq.ufra-commerce&select=id&limit=1');
     const storeId = stores?.[0]?.id;
@@ -69,7 +74,8 @@ export default async function handler(req, res) {
       };
     }).filter(p => p.salePrice != null && p.salePrice >= MIN_VISIBLE_PRICE);
 
-    const products=visible.slice(offset,offset+limit);
+    const matched = q ? visible.filter(p => searchText(`${p.name || ''} ${p.brand || ''} ${p.sku || ''}`).includes(q)) : visible;
+    const products=matched.slice(offset,offset+limit);
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
@@ -77,6 +83,8 @@ export default async function handler(req, res) {
       offset,
       limit,
       count: products.length,
+      total: matched.length,
+      query: q || null,
       pricing: {
         ruleId: rule.id,
         name: rule.name,
