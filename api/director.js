@@ -72,6 +72,16 @@ async function runCatalogTool(req, args) {
   return data;
 }
 
+function availabilityQuery(text){
+  const raw=String(text||'').replace(/[¿?¡!"“”']/g,' ').replace(/\s+/g,' ').trim();
+  const lower=raw.toLowerCase();
+  if(!/(\btienes\b|\btienen\b|\bmanejas\b|\bmanejan\b|\bhay\b|\bvendes\b|\bvenden\b|\bdisponible\b|\bdisponibilidad\b)/i.test(lower))return null;
+  let q=raw
+    .replace(/\b(tienes|tienen|manejas|manejan|hay|vendes|venden|disponible|disponibilidad|de|del|la|el|los|las|algún|alguna|alguno)\b/gi,' ')
+    .replace(/\s+/g,' ').trim();
+  return q.length>=2?q:null;
+}
+
 export default async function handler(req,res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ok:false,error:'Method not allowed'});
@@ -79,8 +89,16 @@ export default async function handler(req,res) {
     if (!messages.length || messages[messages.length-1].role !== 'user') return res.status(400).json({ok:false,error:'A user message is required'});
 
     let input=messages;
-    let response=await openai({ model:process.env.DIRECTOR_MODEL || 'gpt-5.6-luna', instructions:DIRECTOR_INSTRUCTIONS, input, tools, tool_choice:'auto' });
     let products=[];
+    let instructions=DIRECTOR_INSTRUCTIONS;
+    const preflightQ=availabilityQuery(messages[messages.length-1].content);
+    if(preflightQ){
+      const preflight=await runCatalogTool(req,{q:preflightQ,limit:8});
+      products=preflight.products||[];
+      instructions += `\n\nVERIFICACIÓN DE CATÁLOGO YA EJECUTADA POR EL SERVIDOR PARA ESTA PREGUNTA. Consulta: ${JSON.stringify(preflightQ)}. Resultado real: ${JSON.stringify(preflight)}. Debes basar cualquier afirmación de disponibilidad o ausencia en este resultado. Si count > 0, está PROHIBIDO decir que la marca/producto no aparece o no está disponible.`;
+    }
+
+    let response=await openai({ model:process.env.DIRECTOR_MODEL || 'gpt-5.6-luna', instructions, input, tools, tool_choice:'auto' });
 
     for (let turn=0; turn<3; turn++) {
       const calls=(response.output || []).filter(x => x.type === 'function_call' && x.name === 'search_catalog');
@@ -94,9 +112,9 @@ export default async function handler(req,res) {
         turnProducts.push(...(result.products || []));
         outputs.push({ type:'function_call_output', call_id:call.call_id, output:JSON.stringify(result) });
       }
-      products=turnProducts;
+      if(turnProducts.length) products=turnProducts;
       input=[...input,...(response.output || []),...outputs];
-      response=await openai({ model:process.env.DIRECTOR_MODEL || 'gpt-5.6-luna', instructions:DIRECTOR_INSTRUCTIONS, input, tools, tool_choice:'auto' });
+      response=await openai({ model:process.env.DIRECTOR_MODEL || 'gpt-5.6-luna', instructions, input, tools, tool_choice:'auto' });
     }
 
     const unique=[...new Map(products.map(p=>[p.id,p])).values()].slice(0,8);
