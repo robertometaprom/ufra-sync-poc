@@ -18,7 +18,7 @@ export default async function handler(req,res){
 .sax-feed{grid-row:1;min-height:0;overflow-y:auto!important;overflow-x:hidden;padding-top:42px;padding-right:4px;scrollbar-width:thin;overflow-anchor:auto!important}
 .sax-recommendations{grid-row:2;min-height:0;overflow-y:auto;border-top:1px solid #ddd1c4;padding:10px 4px 4px;scrollbar-width:thin;overflow-anchor:none!important}
 .sax-recommendations:empty{display:none}.sax-recommendations-title{font-family:Georgia,serif;font-size:16px;margin:0 0 9px;color:#2d2621}.sax-recommendations .turn-products{padding:0 0 10px}.sax-recommendations .turn-products-head{display:none}.sax-recommendations .products{grid-template-columns:repeat(2,minmax(0,1fr))!important}
-.shx-account-btn{border:1px solid #d8c9b8!important;background:#fffaf5!important;color:#1d1815!important;border-radius:999px!important;padding:8px 12px!important;font-weight:700!important;white-space:nowrap}
+.shx-account-btn{border:1px solid #d8c9b8!important;background:#fffaf5!important;color:#1d1815!important;border-radius:999px!important;padding:8px 12px!important;font-weight:700!important;white-space:nowrap!important;display:inline-flex!important;align-items:center!important;visibility:visible!important;opacity:1!important}
 .shx-auth-backdrop{position:fixed;inset:0;z-index:200;background:rgba(18,14,12,.48);display:none;align-items:center;justify-content:center;padding:18px}.shx-auth-backdrop.open{display:flex}.shx-auth-card{width:min(420px,100%);background:#fffaf5;border:1px solid #ded1c3;border-radius:18px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.24);font-family:Arial,sans-serif;color:#241e1a}.shx-auth-card h2{font-family:Georgia,serif;font-size:28px;margin:0 0 6px}.shx-auth-card p{font-size:14px;line-height:1.45;margin:0 0 18px;color:#5a4f47}.shx-auth-field{display:block;margin:0 0 12px}.shx-auth-field span{display:block;font-size:12px;font-weight:700;margin:0 0 6px}.shx-auth-field input{width:100%;border:1px solid #d8c9b8;border-radius:12px;padding:12px 13px;background:#fff;font-size:15px}.shx-auth-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.shx-auth-primary,.shx-auth-secondary,.shx-auth-logout{border:0;border-radius:12px;padding:12px 14px;font-weight:700;cursor:pointer}.shx-auth-primary,.shx-auth-logout{background:#171310;color:#fff}.shx-auth-secondary{background:#eee4d9;color:#241e1a}.shx-auth-logout{width:100%;margin-top:12px}.shx-auth-status{min-height:18px;margin-top:12px!important;font-size:13px!important;color:#7a2f2f!important}.shx-auth-close{float:right;border:0;background:transparent;font-size:24px;cursor:pointer;color:#665b53}.shx-auth-user{background:#f1e7dc;border-radius:12px;padding:12px 14px;margin-top:12px;font-size:14px}
 @media(max-width:1180px){.sax-recommendations .products{grid-template-columns:1fr!important}}@media(max-width:820px){.sax-body{grid-template-rows:minmax(160px,45%) minmax(0,55%)}.sax-feed{padding-top:42px}}@media(max-width:720px){.shx-auth-actions{grid-template-columns:1fr}}
 </style>
@@ -60,7 +60,17 @@ try{
   const SB_URL='https://yfbuxelsdpucmtxnuazv.supabase.co';
   const SB_KEY='sb_publishable_Oj2nv9h1zLVuiBqEndPgLg_0P64QJhq';
   const AUTH_KEY='shaxx_auth_v1';
-  const accountBtn=document.getElementById('shxAccountBtn');
+  let accountBtn=document.getElementById('shxAccountBtn');
+  if(!accountBtn){
+    const actions=document.querySelector('.top-actions');
+    if(actions){
+      accountBtn=document.createElement('button');
+      accountBtn.id='shxAccountBtn';accountBtn.className='shx-account-btn';accountBtn.type='button';accountBtn.textContent='Entrar';
+      const cart=actions.querySelector('a[href="/cart.html"]');
+      if(cart)actions.insertBefore(accountBtn,cart);else actions.appendChild(accountBtn);
+    }
+  }
+  if(!accountBtn)throw new Error('Account mount point not found');
   const backdrop=document.getElementById('shxAuthBackdrop');
   const guest=backdrop.querySelector('.shx-auth-guest'),signed=backdrop.querySelector('.shx-auth-signed'),status=backdrop.querySelector('.shx-auth-status'),email=backdrop.querySelector('.shx-auth-email'),password=backdrop.querySelector('.shx-auth-password'),userBox=backdrop.querySelector('.shx-auth-user');
   function loadAuth(){try{return JSON.parse(localStorage.getItem(AUTH_KEY)||'null')}catch{return null}}
