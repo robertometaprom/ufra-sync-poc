@@ -11,6 +11,13 @@ export default async function handler(req,res){
       '<button id="shxAccountBtn" class="shx-account-btn" type="button">Entrar</button><a href="/cart.html">Carrito <span id="cartCount">0</span></a>'
     );
 
+    html=html.replace('placeholder="Buscar en esta página por marca o perfume"','placeholder="Buscar productos o marcas"');
+    html=html.replace('No encontré productos con ese término en esta página.','No encontré productos con ese término en el catálogo.');
+    html=html.replace("search.value='';skeletons();","skeletons();");
+    html=html.replace("fetch(`/api/catalog?limit=${PAGE_SIZE}&offset=${offset}&t=${Date.now()}`,{cache:'no-store'})","fetch(`/api/catalog?limit=${PAGE_SIZE}&offset=${offset}&q=${encodeURIComponent(search.value.trim())}&t=${Date.now()}`,{cache:'no-store'})");
+    html=html.replace("meta.textContent=`${rows.length} productos`;render();nav()","meta.textContent=search.value.trim()?`${d.total} resultados`:`${d.total} productos`;render();nav()");
+    html=html.replace("search.addEventListener('input',render);prev.onclick=()=>load(page-1);next.onclick=()=>load(page+1);load(1)})();","let searchTimer;search.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>load(1),250)});prev.onclick=()=>load(page-1);next.onclick=()=>load(page+1);load(1)})();");
+
     const inject=`
 <style>
 .sax-body{display:grid!important;grid-template-rows:minmax(170px,42%) minmax(0,58%);gap:10px;overflow:hidden!important;padding:12px!important}
