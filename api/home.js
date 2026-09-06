@@ -6,7 +6,64 @@ export default async function handler(req,res) {
     if (!r.ok) throw new Error(`index ${r.status}`);
     let html = await r.text();
 
-    const fix = `\n<style>\n/* Prevent browser scroll anchoring from jumping to recommendation cards. */\n.sax-body,.sax-feed,.turn,.turn-products,.products{overflow-anchor:none!important}\n</style>\n<script>\ntry {\n  function saxShow(el, offset) {\n    if (!el || !body) return;\n    requestAnimationFrame(() => requestAnimationFrame(() => {\n      if (!el.isConnected) return;\n      const br = body.getBoundingClientRect();\n      const er = el.getBoundingClientRect();\n      body.scrollTop = Math.max(0, body.scrollTop + er.top - br.top - (offset || 8));\n    }));\n  }\n\n  // Product-card insertion must never move the viewport to the bottom.\n  bottom = function(){};\n\n  // On desktop open SAX already at its wider recommendation width. This removes the\n  // mid-answer width change that was reflowing text upward when cards appeared.\n  const originalOpenSax = openSax;\n  openSax = function(){\n    originalOpenSax();\n    if (innerWidth > 1180) document.body.classList.add('sax-expanded');\n  };\n\n  const originalAddMsg = addMsg;\n  addMsg = function(role,text,turn){\n    const m = originalAddMsg(role,text,turn);\n    saxShow(m, 8);\n    return m;\n  };\n\n  const originalAddProducts = addProducts;\n  addProducts = function(items,turn){\n    originalAddProducts(items,turn);\n    if (!items || !items.length) return;\n    const messages = turn.querySelectorAll('.msg.assistant');\n    const answer = messages[messages.length - 1];\n    // Keep the answer visible after the cards are inserted and after images/layout settle.\n    saxShow(answer, 8);\n    [80,180,350,650].forEach(ms => setTimeout(() => saxShow(answer, 8), ms));\n  };\n} catch (e) { console.error('SAX scroll fix', e); }\n</script>\n`;
+    const fix = `
+<style>
+/* SAX two-pane experience: conversation stays readable; recommendations scroll separately. */
+.sax-body{display:grid!important;grid-template-rows:minmax(170px,42%) minmax(0,58%);gap:10px;overflow:hidden!important;padding:12px!important}
+.sax-suggestions{grid-row:1;align-self:start;z-index:2;background:#fffaf5;margin-bottom:0;padding-bottom:8px}
+.sax-feed{grid-row:1;min-height:0;overflow-y:auto!important;overflow-x:hidden;padding-top:42px;padding-right:4px;scrollbar-width:thin;overflow-anchor:none!important}
+.sax-recommendations{grid-row:2;min-height:0;overflow-y:auto;border-top:1px solid #ddd1c4;padding:10px 4px 4px;scrollbar-width:thin;overflow-anchor:none!important}
+.sax-recommendations:empty{display:none}
+.sax-recommendations-title{font-family:Georgia,serif;font-size:16px;margin:0 0 9px;color:#2d2621}
+.sax-recommendations .turn-products{padding:0 0 10px}
+.sax-recommendations .turn-products-head{display:none}
+.sax-recommendations .products{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.turn,.turn-products,.products{overflow-anchor:none!important}
+@media(max-width:1180px){.sax-recommendations .products{grid-template-columns:1fr!important}}
+@media(max-width:820px){.sax-body{grid-template-rows:minmax(160px,45%) minmax(0,55%)}.sax-feed{padding-top:42px}}
+</style>
+<script>
+try {
+  // Remove the old bottom-scrolling behavior completely.
+  bottom = function(){};
+
+  // Keep SAX wide on desktop so recommendations have room, without changing width mid-answer.
+  const originalOpenSax = openSax;
+  openSax = function(){
+    originalOpenSax();
+    if (innerWidth > 1180) document.body.classList.add('sax-expanded');
+  };
+
+  // Create a physically separate recommendation pane below the conversation.
+  const recPane = document.createElement('section');
+  recPane.className = 'sax-recommendations';
+  recPane.setAttribute('aria-label','Opciones recomendadas por SAX');
+  body.appendChild(recPane);
+
+  const originalAddMsg = addMsg;
+  addMsg = function(role,text,turn){
+    const m = originalAddMsg(role,text,turn);
+    // New conversational content always remains in the upper pane.
+    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    return m;
+  };
+
+  const originalAddProducts = addProducts;
+  addProducts = function(items,turn){
+    originalAddProducts(items,turn);
+    if (!items || !items.length) return;
+    const block = turn.querySelector('.turn-products');
+    if (!block) return;
+
+    // Only the newest recommendation set is shown below. It cannot push conversation text.
+    recPane.innerHTML = '<div class="sax-recommendations-title">Opciones para ti</div>';
+    recPane.appendChild(block);
+    recPane.scrollTop = 0;
+    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+  };
+} catch (e) { console.error('SAX two-pane layout', e); }
+</script>
+`;
 
     html = html.replace('</body>', `${fix}</body>`);
     res.setHeader('Content-Type','text/html; charset=utf-8');
