@@ -84,6 +84,13 @@ Known IDs:
 - Supplier slug: `ufra`
 - Store slug: `ufra-commerce`
 
+Customer-order security state:
+- `orders.user_id uuid` links authenticated orders to `auth.users(id)`.
+- Index: `orders_user_id_created_at_idx`.
+- RLS policy `customers_select_own_orders` allows authenticated users to SELECT only rows where `auth.uid() = user_id`.
+- `order_items` intentionally has no customer SELECT policy because it contains `supplier_cost_snapshot` and supplier cost must never be exposed.
+- Backend order reads for customer UI also apply an explicit `user_id` filter and return safe summary fields only.
+
 ## 4. Catalog state
 
 Known-good catalog state:
@@ -192,13 +199,15 @@ Auth is implemented through Supabase Auth and currently supports:
 Storefront behavior:
 - Header shows customer name, not email.
 - Existing account can edit/save its display name.
-- Client session stored locally by storefront auth runtime.
-- `window.SHAXXIA_AUTH` exposes access-token/user helpers for future authenticated order linkage.
+- Signed account modal includes `Mis pedidos`.
+- Client session stored locally by storefront auth runtime under `shaxx_auth_v1`.
+- `window.SHAXXIA_AUTH` exposes access-token/user helpers on the root storefront.
 
 Important commits:
 - `388dbbb13ab7300c45e7acbe4958111a52c507b1` — initial email/password login implementation
-- `9ac2181140d12b6384a9dfe19fdb4119c0efdbe6` — added customer name handling and explicit confirmation redirect
-- `98ceef53c4868504337b9ef93b22c4ebeb3df452` — added Google login UI/flow
+- `9ac2181140d12b6384a9dfe19fdb4119c0efdbe6` — customer name handling and explicit confirmation redirect
+- `98ceef53c4868504337b9ef93b22c4ebeb3df452` — Google login UI/flow
+- `7efcba264d5c706c21a7cd46357a6d74a35bf5fd` — added `Mis pedidos` to signed account UI
 
 Google OAuth configuration:
 - Google Cloud project: `SHAXXIA`
@@ -217,12 +226,9 @@ Google login validation on 2026-09-06:
 
 Do not store OAuth Client Secret in this master. Google client secrets remain managed in Google Cloud and Supabase dashboard.
 
-## 9. Stripe / checkout
+## 9. Stripe / checkout — TEST MODE WORKING
 
 Separate Stripe account/context is used for SHAXXIA. Test mode has been validated.
-
-Known test payment:
-- 9,060 MXN test volume observed in Stripe
 
 Current architecture:
 - `api/create-checkout-session.js` handles both checkout-session creation and Stripe webhook behavior in the same function due Vercel Hobby function limit.
@@ -234,39 +240,78 @@ Webhook events:
 - `checkout.session.completed`
 - `payment_intent.payment_failed`
 
+Behavior:
+- Order is created before Stripe as `pending_payment` / `pending`.
+- Supplier stock and cost are revalidated live before order creation.
+- Stripe session total is reconstructed server-side from persisted order items.
+- Webhook marks successful order `paid` / `paid`.
+- Failed payment intent can mark `payment_status=failed`.
+- Authenticated orders require the same verified Supabase identity before a Stripe session can be created.
+- Guest orders remain supported with `user_id = null`.
+
 Relevant commits:
 - `9134ee4` — added standalone webhook; deployment failed due function limit
 - `eadf733` — consolidated Stripe webhook into checkout endpoint
 - `04e88e2` — removed standalone webhook; deployment returned Ready
 - `45efc060c513c50b346cd3e8e967494f89fa827f` — checkout success page updated for automatic webhook messaging
+- `2f8c1fd913a0ab53ad0521ea288285906d100291` — protected authenticated order checkout
+- `dc0c4b7c5f2e928901a53e344f19ee6a56661b56` — checkout sends same authenticated Bearer token into Stripe-session creation; Vercel success
 
 Do not create another standalone Stripe webhook API function unless plan limits change or an existing function is removed deliberately.
 
-## 10. Login implementation details
+## 10. Customer orders / Mis pedidos — P0 COMPLETE
 
-Current auth runtime lives in `api/home.js`.
+Completed on 2026-09-06.
 
-It uses:
-- Supabase project URL
-- Supabase publishable key
-- Local storage key `shaxx_auth_v1`
-- Password grant for email login
-- Signup endpoint for account creation
-- Refresh token flow
-- `/auth/v1/user` update for display name
-- OAuth authorization flow for Google
-- Google return token capture into the same local session representation
+Implementation:
+- Authenticated order creation sends Supabase Bearer access token from checkout.
+- Backend validates token against Supabase Auth before assigning identity.
+- `orders.user_id` stores verified Supabase UID.
+- Guest checkout remains supported and stores `user_id = null`.
+- Customer order list is served through authenticated `GET /api/create-order`.
+- Customer query is explicitly filtered by verified `user_id`.
+- Customer response exposes only safe order summary fields; it does not expose `order_items` or `supplier_cost_snapshot`.
+- `orders` also has own-user SELECT RLS defense-in-depth.
+- `order_items` intentionally remains inaccessible directly to customers.
+- `orders.html` provides customer-facing `Mis pedidos`.
+- Signed-in account UI links to `Mis pedidos`.
+- Authenticated Stripe-session creation rejects access to an authenticated order owned by another account.
 
-Future work must not assume auth is already linked to orders. Login works, but order ownership has not yet been completed.
+Relevant commits:
+- `1723dd2487db33bb7292857bf1e614b23f2c1c41` — link orders to verified Supabase users and authenticated customer order list
+- `f2b81bd8db73e57aa02b9309317cab9a0459778b` — send authenticated session with checkout order creation
+- `1cfa4ec4c489efd0c0a712e58ef4d1b540a84275` — add customer `Mis pedidos` page
+- `7efcba264d5c706c21a7cd46357a6d74a35bf5fd` — add `Mis pedidos` to account UI
+- `2f8c1fd913a0ab53ad0521ea288285906d100291` — protect authenticated order checkout
+- `dc0c4b7c5f2e928901a53e344f19ee6a56661b56` — pass authenticated headers into Stripe session creation
 
-## 11. Known-good user account validation
+Manual production validation on 2026-09-06:
+- Two separate customer accounts were used.
+- Two separate Stripe test payments completed successfully.
+- Each account saw its own order correctly.
+- User reported both accounts / both payments working perfectly.
+- Existing checkout and Stripe flow remained functional.
 
-On 2026-09-06, Supabase Auth showed one customer account with:
-- Display name: Roberto Valle
-- Same email account linked to both Email and Google providers
-- No duplicate Google-only user created
+Product decision:
+- Guest checkout is intentionally preserved to avoid blocking sales.
+- Do not attach guest historical orders to an account merely by unverified email matching.
+- Future optional reclaim flow may link historical guest orders only after verified ownership of the email/account.
 
-This validates Supabase automatic identity linking for the tested same-email flow.
+## 11. Transactional email — REQUIRED BEFORE REAL LAUNCH, BLOCKED ON DOMAIN
+
+Current state:
+- No SHAXXIA custom production domain has been purchased/configured yet.
+- Therefore do not add a temporary transactional-email implementation now unless explicitly requested.
+
+Desired future behavior after domain exists:
+- Configure a transactional sender such as `pedidos@<shaxxia-domain>`.
+- Send order-confirmation email only after Stripe/webhook confirms `payment_status=paid`.
+- Include order number, products, total, delivery address and link to order where applicable.
+- Make delivery idempotent so Stripe webhook retries do not send duplicate emails.
+- Store a delivery marker such as `confirmation_email_sent_at`.
+- Later add shipment/tracking and delivered notifications.
+
+This is especially important for guest checkout because guests may not use `Mis pedidos`.
 
 ## 12. Security / hard guardrails
 
@@ -281,50 +326,74 @@ This validates Supabase automatic identity linking for the tested same-email flo
 9. If a change breaks a critical flow, revert to the last known-good state instead of layering speculative patches.
 10. Respect Vercel Hobby function-count limits.
 11. Do not replace huge `index.html` blindly; it contains embedded binary-like data URI content.
+12. Do not create customer access to `order_items` that could expose `supplier_cost_snapshot`.
 
-## 13. Current open product/engineering work
+## 13. Remaining launch dependencies / decisions
 
-### P0 — CUSTOMER ORDERS / MIS PEDIDOS
+The main remaining blockers are now largely commercial/operational dependencies rather than missing core storefront code.
 
-This is the exact next session starting point.
+### A. Custom SHAXXIA domain
+Required before public launch / brand polish.
+After domain purchase:
+- Connect domain to Vercel.
+- Update Supabase Site URL / redirect allow list.
+- Update Google OAuth authorized origin as required.
+- Verify production HTTPS/routing.
+- Configure transactional email domain/DNS.
 
-Goal:
-1. Link each new order to the authenticated Supabase user UID.
-2. Send the user's Supabase Bearer access token from the storefront/checkout flow.
-3. Validate that token server-side before trusting user identity.
-4. Persist authenticated user ID on the order record using a proper column/migration if needed.
-5. Keep guest behavior explicit; do not silently assign orders to arbitrary emails.
-6. Build `Mis pedidos` so authenticated customers can see only their own purchases.
-7. Enforce ownership server-side / via RLS or equivalent secure query boundary.
-8. Preserve existing checkout and Stripe behavior.
-9. Avoid adding unnecessary new Vercel serverless functions.
-10. Do not modify SAX unless required for this task.
+### B. Shipping / freight model
+Current checkout still shows shipping as a test value (`$0 prueba`).
+Before real payments:
+- Decide how shipping will work commercially.
+- Determine whether PyeM or another provider exposes an API, rate table, portal workflow or manual fulfillment process.
+- Define origin, destination, weight/dimensions, zones, free-shipping thresholds if any, and who absorbs/marks up freight.
+- Once rules/source are known, calculate shipping server-side before Stripe and persist it on the order.
 
-Before implementation:
-- Audit current `orders`, `order_items`, `api/create-order.js`, `api/create-checkout-session.js`, cart/checkout client code, and current RLS policies.
-- Identify exact current order lifecycle and where order rows are created.
-- Determine whether an authenticated user column already exists before adding one.
-- Make the smallest safe change.
+Do not implement freight logic until the operational model/API is known.
 
-Acceptance criteria:
-- Logged-in customer places an order and order row stores their verified Supabase UID.
-- Server ignores/does not trust a client-provided UID without validating Bearer token.
-- Same customer can later retrieve their own orders.
-- A different authenticated user cannot retrieve those orders.
-- Existing Stripe checkout remains functional.
-- Build/deployment returns Ready.
+### C. Fulfillment / supplier handoff
+Need to define the real post-payment operational flow:
+- How SHAXXIA sends a paid order to UFRA/PyeM or other fulfillment party.
+- Whether this is API, portal, email, CSV, manual process, or combination.
+- How tracking number/carrier/status returns to SHAXXIA.
+- What happens on supplier failure after payment.
 
-## 14. Secondary future items
+Implementation depends on the provider process and should not be guessed.
 
-After P0 Customer Orders:
-- Customer-facing `Mis pedidos` UI
-- Shipping/freight integration with provider/courier rules/API
-- Further supplier synchronization automation and monitoring
-- PyeM fulfillment integration
-- Improve SAX markdown rendering safely
-- Generalize brand availability preflight without breaking literal brand names such as `La Rive` or `El Ganso`
-- Custom production domain for SHAXXIA when ready
-- Google OAuth branding/verification polish when public launch requires it
+### D. Real-payment launch controls
+Stripe is currently validated in test mode.
+Before taking real money:
+- Confirm business/payment account readiness.
+- Switch to live Stripe credentials deliberately.
+- Configure/verify live webhook endpoint and secret.
+- Run a controlled low-value live transaction.
+- Confirm refunds/cancellations/failed-payment handling operationally.
+
+Do not switch Stripe to live casually during unrelated work.
+
+### E. Transactional email
+Blocked until custom domain exists. See section 11.
+
+### F. Customer/legal/store policies
+Before public ecommerce launch, supply final business text/details for:
+- Shipping policy and expected delivery times.
+- Returns/refunds/cancellations.
+- Privacy notice / personal-data handling.
+- Terms and conditions.
+- Contact/support channel.
+- Business identity/contact details required for customer-facing operation.
+
+These are content/business decisions first; implementation into the site is straightforward after copy is finalized.
+
+## 14. Secondary future product/engineering items — NOT LAUNCH-BLOCKING RIGHT NOW
+
+- Further supplier synchronization automation and monitoring.
+- Improve SAX markdown output safely.
+- Generalize brand availability preflight without breaking literal brand names such as `La Rive` or `El Ganso`.
+- Expand `Mis pedidos` with product-level details/tracking after fulfillment data exists.
+- Guest-order reclaim after verified account ownership, if desired.
+- Google OAuth branding/verification polish when public launch requires it.
+- Additional analytics/monitoring/customer-service tooling as business volume justifies it.
 
 ## 15. Session operating rule
 
@@ -334,9 +403,17 @@ When continuing development:
 - Prefer one smallest change at a time.
 - Build/verify deployment after changes.
 - Do not claim a feature works merely because deployment succeeded; validate the actual customer flow when possible.
+- Do not invent operational integrations before supplier/shipping/provider rules are known.
 
 # NEXT SESSION START HERE
 
-Continue with **P0 — CUSTOMER ORDERS / MIS PEDIDOS**.
+**P0 CUSTOMER ORDERS / MIS PEDIDOS IS COMPLETE.**
 
-First action should be read-only audit of the existing order path and schema. Do not implement until the exact current order lifecycle, current columns, auth-token availability, and existing RLS are understood. Then make the smallest secure change to attach verified Supabase user identity to orders without breaking checkout or Stripe.
+Do not modify checkout/order/auth/Stripe merely for cleanup; the current state is known-good and manually validated with two accounts and two successful Stripe test payments.
+
+Next development work is intentionally blocked on business inputs:
+1. User provides SHAXXIA custom domain decision/purchase.
+2. User provides shipping/freight operating model and any PyeM/provider API or process information.
+3. User provides fulfillment handoff/tracking process.
+
+Once one of those inputs is available, audit that specific integration read-only first and make the smallest safe implementation without disturbing the known-good order/Stripe flow.
