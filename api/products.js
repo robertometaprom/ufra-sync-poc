@@ -26,7 +26,6 @@ function findProductLinks(html) {
   return links;
 }
 function findCatalogTotal(html) {
-  // Decode/strip first because Magento may render í as an HTML entity.
   const text = stripHtml(html);
   const match = text.match(/Art[ií]culos\s+[\d,]+-[\d,]+\s+de\s+([\d,]+)/i);
   if (!match) return null;
@@ -35,7 +34,6 @@ function findCatalogTotal(html) {
 function hasExplicitNextPage(html, page) {
   const decoded = decodeHtml(html);
   const nextPage = page + 1;
-  // Magento paginator links include ?p=N or &p=N. Do not infer the end from product count.
   const pageHref = new RegExp(`href=["'][^"']*(?:\\?|&)p=${nextPage}(?:&[^"']*)?["']`, 'i');
   if (pageHref.test(decoded)) return true;
   return /class=["'][^"']*action\s+next[^"']*["']/i.test(decoded) && /Página\s+Siguiente|Siguiente/i.test(stripHtml(decoded));
@@ -52,18 +50,29 @@ function parseJsonLd(html) {
   return null;
 }
 function firstMatch(html, patterns) { for (const re of patterns) { const m = html.match(re); if (m?.[1]) return stripHtml(m[1]); } return null; }
+function priceFromType(html, type) {
+  const escaped = String(type).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return moneyToNumber(firstMatch(html, [
+    new RegExp(`data-price-type=["']${escaped}["'][\\s\\S]{0,500}?data-price-amount=["']([^"']+)["']`, 'i'),
+    new RegExp(`data-price-amount=["']([^"']+)["'][^>]{0,300}?data-price-type=["']${escaped}["']`, 'i')
+  ]));
+}
 function parseProduct(html, sourceUrl) {
   const ld = parseJsonLd(html), offers = Array.isArray(ld?.offers) ? ld.offers[0] : ld?.offers;
   const rawName = ld?.name || firstMatch(html, [/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i, /<span[^>]+data-ui-id=["']page-title-wrapper["'][^>]*>([\s\S]*?)<\/span>/i, /<h1[^>]*>([\s\S]*?)<\/h1>/i]);
   const sku = cleanText(ld?.sku || firstMatch(html, [/itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /class=["'][^"']*value[^"']*["'][^>]*itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /SKU\s*[:#]?\s*<[^>]*>([^<]+)/i]) || '');
   const name = cleanText(rawName || '');
-  const price = moneyToNumber(offers?.price) || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /data-price-type=["']finalPrice["'][\s\S]{0,500}?<span[^>]+class=["'][^"']*price[^"']*["'][^>]*>([^<]+)<\/span>/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
+  const finalPrice = priceFromType(html, 'finalPrice') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+  const oldPrice = priceFromType(html, 'oldPrice') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+  const fallbackPrice = moneyToNumber(offers?.price) || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
+  const price = finalPrice || fallbackPrice;
+  const listPrice = oldPrice != null && price != null && oldPrice > price ? oldPrice : null;
   const availabilityRaw = String(offers?.availability || '');
   const inStock = availabilityRaw ? /InStock/i.test(availabilityRaw) : !/Agotado|Sin existencias/i.test(html);
   const image = ld?.image ? (Array.isArray(ld.image) ? ld.image[0] : ld.image) : firstMatch(html, [/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i]);
   const rawBrand = typeof ld?.brand === 'string' ? ld.brand : ld?.brand?.name;
   const brand = cleanText(rawBrand || (name ? name.split(' ')[0] : '')) || null;
-  return { sku, name, brand, supplierPrice: price, inStock, image, sourceUrl };
+  return { sku, name, brand, supplierPrice: price, supplierListPrice: listPrice, inStock, image, sourceUrl };
 }
 function applyMargin(cost) { if (cost == null) return null; const multiplier = cost < 500 ? 1.45 : cost <= 1000 ? 1.35 : 1.25; return Math.ceil((cost * multiplier) / 10) * 10; }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -120,7 +129,7 @@ async function syncProduct(product, supplierId, storeId) {
   } else {
     await db(`products?id=eq.${productId}`, { method: 'PATCH', prefer: 'return=minimal', body: { canonical_name: product.name, brand: product.brand, image_url: product.image, active: true, updated_at: now } });
   }
-  const supplierRow = { supplier_id: supplierId, product_id: productId, supplier_sku: String(product.sku), supplier_name: product.name, source_url: product.sourceUrl, supplier_price: product.supplierPrice, currency: 'MXN', in_stock: product.inStock, image_url: product.image, raw_attributes: { brand: product.brand }, last_seen_at: now, last_synced_at: now, active: true };
+  const supplierRow = { supplier_id: supplierId, product_id: productId, supplier_sku: String(product.sku), supplier_name: product.name, source_url: product.sourceUrl, supplier_price: product.supplierPrice, supplier_list_price: product.supplierListPrice, currency: 'MXN', in_stock: product.inStock, image_url: product.image, raw_attributes: { brand: product.brand }, last_seen_at: now, last_synced_at: now, active: true };
   let supplierProductId = existing?.[0]?.id;
   if (supplierProductId) await db(`supplier_products?id=eq.${supplierProductId}`, { method: 'PATCH', prefer: 'return=minimal', body: supplierRow });
   else { const created = await db('supplier_products?select=id', { method: 'POST', prefer: 'return=representation', body: supplierRow }); supplierProductId = created?.[0]?.id; }
