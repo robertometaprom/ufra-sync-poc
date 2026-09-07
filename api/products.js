@@ -1,4 +1,4 @@
-const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
+const CATEGORY_URL = 'https://ufra.com.mx/categorias.html';
 const PAGE_SIZE = 24;
 const BATCH_SIZE = 4;
 const CONCURRENCY = 2;
