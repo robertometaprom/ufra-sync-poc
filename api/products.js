@@ -57,13 +57,19 @@ function priceFromType(html, type) {
     new RegExp(`data-price-amount=["']([^"']+)["'][^>]{0,300}?data-price-type=["']${escaped}["']`, 'i')
   ]));
 }
+function labeledPrice(text, label) {
+  const escaped = String(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(text || '').match(new RegExp(`${escaped}\\s*\\$?\\s*([0-9][0-9,.]*)`, 'i'));
+  return moneyToNumber(match?.[1]);
+}
 function parseProduct(html, sourceUrl) {
   const ld = parseJsonLd(html), offers = Array.isArray(ld?.offers) ? ld.offers[0] : ld?.offers;
   const rawName = ld?.name || firstMatch(html, [/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i, /<span[^>]+data-ui-id=["']page-title-wrapper["'][^>]*>([\s\S]*?)<\/span>/i, /<h1[^>]*>([\s\S]*?)<\/h1>/i]);
   const sku = cleanText(ld?.sku || firstMatch(html, [/itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /class=["'][^"']*value[^"']*["'][^>]*itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /SKU\s*[:#]?\s*<[^>]*>([^<]+)/i]) || '');
   const name = cleanText(rawName || '');
-  const finalPrice = priceFromType(html, 'finalPrice') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
-  const oldPrice = priceFromType(html, 'oldPrice') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+  const pageText = stripHtml(html);
+  const finalPrice = priceFromType(html, 'finalPrice') || labeledPrice(pageText, 'Precio especial') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+  const oldPrice = priceFromType(html, 'oldPrice') || labeledPrice(pageText, 'Precio habitual') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
   const fallbackPrice = moneyToNumber(offers?.price) || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
   const price = finalPrice || fallbackPrice;
   const listPrice = oldPrice != null && price != null && oldPrice > price ? oldPrice : null;
