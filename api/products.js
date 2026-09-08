@@ -68,11 +68,13 @@ function parseProduct(html, sourceUrl) {
   const sku = cleanText(ld?.sku || firstMatch(html, [/itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /class=["'][^"']*value[^"']*["'][^>]*itemprop=["']sku["'][^>]*>([\s\S]*?)<\//i, /SKU\s*[:#]?\s*<[^>]*>([^<]+)/i]) || '');
   const name = cleanText(rawName || '');
   const pageText = stripHtml(html);
+  const jsonLdPrice = moneyToNumber(offers?.price);
   const finalPrice = priceFromType(html, 'finalPrice') || labeledPrice(pageText, 'Precio especial') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
   const oldPrice = priceFromType(html, 'oldPrice') || labeledPrice(pageText, 'Precio habitual') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
-  const fallbackPrice = moneyToNumber(offers?.price) || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
+  const fallbackPrice = jsonLdPrice || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
   const price = finalPrice || fallbackPrice;
-  const listPrice = oldPrice != null && price != null && oldPrice > price ? oldPrice : null;
+  const listCandidate = oldPrice != null ? oldPrice : (finalPrice != null && jsonLdPrice != null && jsonLdPrice > finalPrice ? jsonLdPrice : null);
+  const listPrice = listCandidate != null && price != null && listCandidate > price ? listCandidate : null;
   const availabilityRaw = String(offers?.availability || '');
   const inStock = availabilityRaw ? /InStock/i.test(availabilityRaw) : !/Agotado|Sin existencias/i.test(html);
   const image = ld?.image ? (Array.isArray(ld.image) ? ld.image[0] : ld.image) : firstMatch(html, [/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i]);
