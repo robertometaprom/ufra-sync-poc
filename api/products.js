@@ -14,7 +14,7 @@ function decodeHtml(s = '') {
 }
 function cleanText(s = '') { return decodeHtml(String(s)).replace(/\s+/g, ' ').trim(); }
 function stripHtml(s = '') { return cleanText(String(s).replace(/<[^>]+>/g, ' ')); }
-function moneyToNumber(value = '') { const n = Number(String(value).replace(/[^0-9.]/g, '')); return Number.isFinite(n) ? n : null; }
+function moneyToNumber(value = '') { const cleaned = String(value ?? '').replace(/[^0-9.]/g, ''); if (!cleaned) return null; const n = Number(cleaned); return Number.isFinite(n) ? n : null; }
 function findProductLinks(html) {
   const links = [], seen = new Set();
   const re = /<a[^>]+class=["'][^"']*product-item-link[^"']*["'][^>]+href=["']([^"']+)["']/gi;
@@ -69,8 +69,8 @@ function parseProduct(html, sourceUrl) {
   const name = cleanText(rawName || '');
   const pageText = stripHtml(html);
   const jsonLdPrice = moneyToNumber(offers?.price);
-  const finalPrice = priceFromType(html, 'finalPrice') || labeledPrice(pageText, 'Precio especial') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
-  const oldPrice = priceFromType(html, 'oldPrice') || labeledPrice(pageText, 'Precio habitual') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+  const finalPrice = labeledPrice(pageText, 'Precio especial') || priceFromType(html, 'finalPrice') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+  const oldPrice = labeledPrice(pageText, 'Precio habitual') || priceFromType(html, 'oldPrice') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
   const fallbackPrice = jsonLdPrice || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
   const price = finalPrice || fallbackPrice;
   const listCandidate = oldPrice != null ? oldPrice : (finalPrice != null && jsonLdPrice != null && jsonLdPrice > finalPrice ? jsonLdPrice : null);
