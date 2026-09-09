@@ -11,6 +11,31 @@ function decodeHtml(s = '') {
 }
 function cleanText(s = '') { return decodeHtml(String(s)).replace(/\s+/g, ' ').trim(); }
 function stripHtml(s = '') { return cleanText(String(s).replace(/<[^>]+>/g, ' ')); }
+function moneyToNumber(value = '') { const n = Number(String(value).replace(/[^0-9.]/g, '')); return Number.isFinite(n) ? n : null; }
+function firstMatch(html, patterns) { for (const re of patterns) { const m = html.match(re); if (m?.[1]) return stripHtml(m[1]); } return null; }
+function priceFromType(html, type) {
+  const escaped = String(type).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return moneyToNumber(firstMatch(html, [
+    new RegExp(`data-price-type=["']${escaped}["'][\\s\\S]{0,500}?data-price-amount=["']([^"']+)["']`, 'i'),
+    new RegExp(`data-price-amount=["']([^"']+)["'][^>]{0,300}?data-price-type=["']${escaped}["']`, 'i')
+  ]));
+}
+function labeledPrice(text, label) {
+  const escaped = String(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(text || '').match(new RegExp(`${escaped}\\s*\\$?\\s*([0-9][0-9,.]*)`, 'i'));
+  return moneyToNumber(match?.[1]);
+}
+function parseJsonLd(html) {
+  const scripts = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const match of scripts) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) if (item && (item['@type'] === 'Product' || item.name) && item.offers) return item;
+    } catch {}
+  }
+  return null;
+}
 
 function findCatalogTotal(html) {
   const text = stripHtml(html);
@@ -86,8 +111,49 @@ async function db(path) {
   return text ? JSON.parse(text) : [];
 }
 
+function assertUfraProductUrl(raw) {
+  const url = new URL(String(raw));
+  if (url.protocol !== 'https:' || url.hostname !== 'ufra.com.mx' || !url.pathname.endsWith('.html')) throw new Error('Invalid UFRA product URL');
+  return url.toString();
+}
+
 export default async function handler(req, res) {
   try {
+    const productUrlParam = String(req.query?.productUrl || '').trim();
+    if (productUrlParam) {
+      const productUrl = assertUfraProductUrl(productUrlParam);
+      const html = await fetchHtml(productUrl);
+      const text = stripHtml(html);
+      const ld = parseJsonLd(html);
+      const offers = Array.isArray(ld?.offers) ? ld.offers[0] : ld?.offers;
+      const jsonLdPrice = moneyToNumber(offers?.price);
+      const finalPrice = priceFromType(html, 'finalPrice') || labeledPrice(text, 'Precio especial') || moneyToNumber(firstMatch(html, [/class=["'][^"']*special-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+      const oldPrice = priceFromType(html, 'oldPrice') || labeledPrice(text, 'Precio habitual') || moneyToNumber(firstMatch(html, [/class=["'][^"']*old-price[^"']*["'][\s\S]{0,1200}?data-price-amount=["']([^"']+)["']/i]));
+      const fallbackPrice = jsonLdPrice || moneyToNumber(firstMatch(html, [/data-price-amount=["']([^"']+)["']/i, /itemprop=["']price["'][^>]+content=["']([^"']+)["']/i]));
+      const price = finalPrice || fallbackPrice;
+      const listCandidate = oldPrice != null ? oldPrice : (finalPrice != null && jsonLdPrice != null && jsonLdPrice > finalPrice ? jsonLdPrice : null);
+      const listPrice = listCandidate != null && price != null && listCandidate > price ? listCandidate : null;
+      const habitualIndex = text.toLowerCase().indexOf('precio habitual');
+      const especialIndex = text.toLowerCase().indexOf('precio especial');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({
+        ok: true,
+        mode: 'product-price-diagnostic',
+        productUrl,
+        htmlLength: html.length,
+        hasPrecioHabitualText: habitualIndex >= 0,
+        hasPrecioEspecialText: especialIndex >= 0,
+        hasFinalPriceMarkup: /data-price-type=["']finalPrice["']/i.test(html),
+        hasOldPriceMarkup: /data-price-type=["']oldPrice["']/i.test(html),
+        jsonLdPrice,
+        finalPrice,
+        oldPrice,
+        resolvedPrice: price,
+        resolvedListPrice: listPrice,
+        priceTextSnippet: habitualIndex >= 0 ? text.slice(Math.max(0, habitualIndex - 80), habitualIndex + 220) : (especialIndex >= 0 ? text.slice(Math.max(0, especialIndex - 80), especialIndex + 220) : null)
+      });
+    }
+
     const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
     const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const pageUrl = page === 1 ? CATEGORY_URL : `${CATEGORY_URL}?p=${page}`;
