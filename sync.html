@@ -51,8 +51,35 @@ const progressEl = document.getElementById('progress');
 const logEl = document.getElementById('log');
 const resumeNote = document.getElementById('resumeNote');
 const qs = new URLSearchParams(location.search);
-const requestedStartPage = Math.max(1, Number.parseInt(qs.get('startPage') || '1', 10) || 1);
-if (requestedStartPage > 1) resumeNote.textContent = `Reanudación configurada desde la página ${requestedStartPage}.`;
+const STATE_KEY = 'ufra-catalog-sync-state-v1';
+
+function loadSavedState(){
+  try{return JSON.parse(localStorage.getItem(STATE_KEY)||'null')}catch{return null}
+}
+function saveState(state){
+  try{localStorage.setItem(STATE_KEY,JSON.stringify(state))}catch{}
+}
+function clearState(){
+  try{localStorage.removeItem(STATE_KEY)}catch{}
+}
+
+const savedState = loadSavedState();
+const explicitStartPage = Number.parseInt(qs.get('startPage') || '', 10);
+const requestedStartPage = Math.max(1, Number.isFinite(explicitStartPage) ? explicitStartPage : Number(savedState?.page || 1));
+const requestedRunId = qs.get('runId') || savedState?.runId || null;
+const savedProcessed = requestedRunId && savedState?.runId === requestedRunId ? Number(savedState?.processed || 0) : 0;
+const savedErrors = requestedRunId && savedState?.runId === requestedRunId ? Number(savedState?.errors || 0) : 0;
+
+if (requestedRunId) {
+  resumeNote.textContent = `Hay una sincronización pendiente. Se reanudará desde la página ${requestedStartPage}.`;
+  startBtn.textContent = 'Reanudar sincronización';
+  runIdEl.textContent = requestedRunId;
+  pageEl.textContent = requestedStartPage;
+  processedEl.textContent = savedProcessed;
+  errorsEl.textContent = savedErrors;
+} else if (requestedStartPage > 1) {
+  resumeNote.textContent = `Reanudación configurada desde la página ${requestedStartPage}.`;
+}
 
 let stopRequested = false;
 let running = false;
@@ -78,18 +105,18 @@ async function runAll() {
   if (running) return;
   running = true;
   stopRequested = false;
-  processed = 0;
-  totalErrors = 0;
+  processed = savedProcessed;
+  totalErrors = savedErrors;
   startBtn.disabled = true;
   stopBtn.disabled = false;
-  statusEl.textContent = 'Sincronizando';
+  statusEl.textContent = requestedRunId ? 'Reanudando' : 'Sincronizando';
   logEl.textContent = '';
 
   let page = requestedStartPage;
-  let runId = null;
+  let runId = requestedRunId;
   let consecutiveFailures = 0;
   const initialBase = (requestedStartPage - 1) * 24;
-  log(`Inicio desde página ${requestedStartPage}.`);
+  log(requestedRunId ? `Reanudando Run ${requestedRunId} desde página ${requestedStartPage}.` : `Inicio desde página ${requestedStartPage}.`);
 
   try {
     while (!stopRequested) {
@@ -124,12 +151,15 @@ async function runAll() {
         progressEl.value = ((dbs.offset + dbs.batchSize) / data.pageSize) * 100;
       }
 
+      const resumePage = dbs.pageComplete ? dbs.nextPage : dbs.page;
+      saveState({runId,page:resumePage,processed,errors:totalErrors,updatedAt:new Date().toISOString()});
       log(`Página ${dbs.page}, batch ${dbs.offset + 1}-${dbs.offset + dbs.batchSize}: ${dbs.saved} guardados, ${dbs.errors} errores.`);
 
       if (dbs.pageComplete) {
         if (!data.hasNext) {
           statusEl.textContent = 'Completado';
           log(`CATÁLOGO COMPLETO. Procesados en esta ejecución: ${processed}.`);
+          clearState();
           break;
         }
         page = dbs.nextPage;
@@ -142,11 +172,11 @@ async function runAll() {
 
     if (stopRequested) {
       statusEl.textContent = 'Detenido';
-      log('Detenido por el usuario. El checkpoint quedó guardado.');
+      log('Detenido por el usuario. El checkpoint quedó guardado y podrá reanudarse al volver a abrir esta página.');
     }
   } catch (err) {
     statusEl.textContent = 'Error';
-    log(`ERROR: ${err.message}`);
+    log(`ERROR: ${err.message}. El checkpoint quedó guardado para reanudar.`);
   } finally {
     running = false;
     startBtn.disabled = false;
