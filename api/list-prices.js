@@ -1,4 +1,4 @@
-const CATEGORY_URL = 'https://ufra.com.mx/categorias/fragancias.html';
+const CATEGORY_URL = 'https://ufra.com.mx/categorias.html';
 const FETCH_TIMEOUT_MS = 12000;
 
 function decodeHtml(s = '') {
@@ -48,13 +48,13 @@ function parseCards(html) {
     const url = decodeHtml(link).split('#')[0];
     if (/\/categorias\//i.test(url) || /\/catalogos(?:\/|\.html)/i.test(url)) continue;
 
-    const oldPriceRaw = extractDataPrice(block, 'oldPrice')
-      || block.match(/class=["'][^"']*old-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1]
-      || extractTextPrice(block, /Precio habitual/i);
+    const oldPriceRaw = extractTextPrice(block, /Precio habitual/i)
+      || extractDataPrice(block, 'oldPrice')
+      || block.match(/class=["'][^"']*old-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1];
 
-    const finalPriceRaw = extractDataPrice(block, 'finalPrice')
-      || block.match(/class=["'][^"']*special-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1]
-      || extractTextPrice(block, /Precio especial/i);
+    const finalPriceRaw = extractTextPrice(block, /Precio especial/i)
+      || extractDataPrice(block, 'finalPrice')
+      || block.match(/class=["'][^"']*special-price[^"']*["'][\s\S]{0,800}?class=["'][^"']*price[^"']*["'][^>]*>\s*\$?\s*([^<]+)</i)?.[1];
 
     cards.push({
       url,
@@ -82,7 +82,7 @@ async function fetchHtml(url) {
   try {
     const r = await fetch(url, {
       headers: {
-        'user-agent': 'Mozilla/5.0 (compatible; UFRA-ListPrice-Backfill/1.2)',
+        'user-agent': 'Mozilla/5.0 (compatible; UFRA-ListPrice-Backfill/1.3)',
         'accept-language': 'es-MX,es;q=0.9'
       },
       cache: 'no-store',
