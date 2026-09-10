@@ -171,11 +171,33 @@ async function syncBatch(products, page, offset, supplierId, storeId, runId, pag
   await db(`sync_runs?id=eq.${runId}`, { method: 'PATCH', prefer: 'return=minimal', body: { status: pageComplete ? 'page_complete' : 'running', cursor_page: nextPage, cursor_index: nextIndex, pages_processed: pageComplete ? 1 : 0, products_seen: nextOffset, products_created: created, products_updated: updated, errors: errors.length, error_details: errors.slice(0, 20), finished_at: pageComplete ? new Date().toISOString() : null } });
   return { runId, saved: valid.length, created, updated, errors: errors.length, page, offset, nextPage, nextIndex, pageComplete, batchSize: products.length, details: errors };
 }
+function assertTargetUrl(raw) {
+  const url = new URL(String(raw));
+  if (url.protocol !== 'https:' || url.hostname !== 'ufra.com.mx' || !url.pathname.endsWith('.html')) throw new Error('Invalid UFRA product URL');
+  return url.toString();
+}
 export default async function handler(req, res) {
   try {
+    const shouldSync = String(req.query?.sync || '') === '1';
+    const targetParam = String(req.query?.productUrl || '').trim();
+    if (targetParam) {
+      const targetUrl = assertTargetUrl(targetParam);
+      const html = await fetchHtml(targetUrl);
+      const parsed = parseProduct(html, targetUrl);
+      const product = { ...parsed, salePrice: applyMargin(parsed.supplierPrice), syncedAt: new Date().toISOString() };
+      if (!shouldSync) {
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).json({ ok: true, mode: 'target-parse', sku: product.sku, hasListPrice: product.supplierListPrice != null, inStock: product.inStock });
+      }
+      const supplierId = await getSingleton('suppliers', 'ufra');
+      const storeId = await getSingleton('stores', 'ufra-commerce');
+      const result = await syncProduct(product, supplierId, storeId);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ ok: true, mode: 'target-sync', sku: product.sku, saved: !result.skipped, created: Boolean(result.created), hasListPrice: product.supplierListPrice != null });
+    }
+
     const requestedPage = Number.parseInt(String(req.query?.page || '1'), 10);
     const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-    const shouldSync = String(req.query?.sync || '') === '1';
     const requestedOffset = Number.parseInt(String(req.query?.offset || '0'), 10);
     const pageUrl = page === 1 ? CATEGORY_URL : `${CATEGORY_URL}?p=${page}`;
     const categoryHtml = await fetchHtml(pageUrl);
