@@ -26,6 +26,12 @@ const compactSax = `
  const firstName=()=>{try{const s=JSON.parse(localStorage.getItem('shaxx_auth_v1')||'null');const u=s&&s.user;const n=(u&&u.user_metadata&&(u.user_metadata.full_name||u.user_metadata.name||u.user_metadata.given_name)||'').trim();return n?n.split(/\\s+/)[0]:'Tú'}catch{return 'Tú'}};
  const label=()=>document.querySelectorAll('.sax-feed .msg').forEach(el=>el.dataset.speaker=el.classList.contains('assistant')?'SAX':firstName());
  label();const feed=document.querySelector('.sax-feed');if(feed)new MutationObserver(label).observe(feed,{childList:true,subtree:true});
+ if(feed&&window.matchMedia('(max-width:620px)').matches){
+   const body=document.querySelector('.sax-body');
+   let raf=0;
+   const keepLatestVisible=()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>{if(!body)return;body.scrollTop=body.scrollHeight;setTimeout(()=>{body.scrollTop=body.scrollHeight},80)});};
+   new MutationObserver(keepLatestVisible).observe(feed,{childList:true,subtree:true,characterData:true});
+ }
 })();
 </script>`;
 
