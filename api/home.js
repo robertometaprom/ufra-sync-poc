@@ -2,17 +2,13 @@ import home from '../lib/home-core.js';
 
 const compactSax = `
 <style id="shx-sax-compact">
-/* Text-first SAX conversation: full screen only after the customer starts talking. */
 .sax-conversation .sax-body{padding:12px 22px 88px!important}
 .sax-feed{gap:4px!important}
 .sax-feed .turn{gap:4px!important;margin:0!important}
 .sax-feed .msg,.sax-feed .msg.assistant,.sax-feed .msg.user{display:block!important;width:100%!important;max-width:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#2d2621!important;font-size:15px!important;line-height:1.35!important;box-shadow:none!important;white-space:pre-wrap!important}
 .sax-feed .msg::before{content:attr(data-speaker) ': ';font-weight:800;color:#171411}
-.turn-products{padding:10px 0 24px!important}
-.turn-products-head{margin:4px 0 12px!important}
-.sax-composer{padding:8px 22px max(8px,env(safe-area-inset-bottom))!important}
-.sax-composer textarea{min-height:42px!important;max-height:105px!important;padding:9px 11px!important;font-size:15px!important;line-height:1.35!important}
-.sax-composer button{height:42px!important}
+.turn-products{padding:10px 0 24px!important}.turn-products-head{margin:4px 0 12px!important}
+.sax-composer{padding:8px 22px max(8px,env(safe-area-inset-bottom))!important}.sax-composer textarea{min-height:42px!important;max-height:105px!important;padding:9px 11px!important;font-size:15px!important;line-height:1.35!important}.sax-composer button{height:42px!important}
 body:not(.sax-started).sax-open{padding-left:var(--sax-w)!important;overflow:auto!important}
 body:not(.sax-started).sax-open .sax-panel{inset:0 auto 0 0!important;width:var(--sax-w)!important;max-width:430px!important;height:100dvh!important;border-right:1px solid #d9cdbf!important;transform:translateX(0)!important}
 body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
@@ -23,51 +19,27 @@ body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
  body:not(.sax-started).sax-open .sax-photo{width:120px!important;height:118px!important}
  body:not(.sax-started).sax-open .sax-title{font-size:30px!important}
  body:not(.sax-started).sax-open .sax-body{padding:10px 12px 74px!important}
+ body.sax-started .sax-panel{height:var(--shx-vh,100dvh)!important;max-height:var(--shx-vh,100dvh)!important;top:var(--shx-vtop,0px)!important;bottom:auto!important}
+ body.sax-started .sax-body{overscroll-behavior:contain!important;overflow-anchor:none!important;scroll-behavior:auto!important}
+ body.sax-started .sax-feed{overflow-anchor:none!important}
 }
-@media(max-width:620px){
- .sax-conversation .sax-body{padding:9px 12px 82px!important}
- .sax-feed{gap:3px!important}.sax-feed .turn{gap:3px!important}
- .sax-feed .msg,.sax-feed .msg.assistant,.sax-feed .msg.user{font-size:13px!important;line-height:1.32!important}
- .sax-composer{padding:7px 10px max(7px,env(safe-area-inset-bottom))!important}
- .sax-composer textarea{min-height:40px!important;font-size:13px!important}
-}
+@media(max-width:620px){.sax-conversation .sax-body{padding:9px 12px 82px!important}.sax-feed{gap:3px!important}.sax-feed .turn{gap:3px!important}.sax-feed .msg,.sax-feed .msg.assistant,.sax-feed .msg.user{font-size:13px!important;line-height:1.32!important}.sax-composer{padding:7px 10px max(7px,env(safe-area-inset-bottom))!important}.sax-composer textarea{min-height:40px!important;font-size:13px!important}}
 </style>
 <script id="shx-sax-speakers">
 (()=>{
  const firstName=()=>{try{const s=JSON.parse(localStorage.getItem('shaxx_auth_v1')||'null');const u=s&&s.user;const n=(u&&u.user_metadata&&(u.user_metadata.full_name||u.user_metadata.name||u.user_metadata.given_name)||'').trim();return n?n.split(/\\s+/)[0]:'Tú'}catch{return 'Tú'}};
- const feed=document.querySelector('.sax-feed'),body=document.querySelector('.sax-body'),panel=document.querySelector('.sax-panel'),composer=document.querySelector('.sax-composer');
+ const feed=document.querySelector('.sax-feed'),body=document.querySelector('.sax-body'),panel=document.querySelector('.sax-panel'),composer=document.querySelector('.sax-composer'),input=composer&&composer.querySelector('textarea');
  const label=()=>document.querySelectorAll('.sax-feed .msg').forEach(el=>el.dataset.speaker=el.classList.contains('assistant')?'SAX':firstName());
  label();if(feed)new MutationObserver(label).observe(feed,{childList:true,subtree:true});
- document.body.classList.remove('sax-expanded','sax-started');
- if(panel)panel.classList.remove('sax-conversation');
- document.body.classList.add('sax-open');
- let started=false,raf=0,timer=0,lastTurn=null;
- const latestTurn=()=>{if(!feed)return null;const turns=feed.querySelectorAll('.turn');return turns.length?turns[turns.length-1]:feed.lastElementChild};
- const pinActiveTurn=()=>{
-   if(!started||!feed||!body)return;
-   cancelAnimationFrame(raf);clearTimeout(timer);
-   raf=requestAnimationFrame(()=>{
-     const turn=latestTurn();if(!turn)return;
-     body.scrollTop=Math.max(0,turn.offsetTop-8);
-     timer=setTimeout(()=>{const t=latestTurn();if(t)body.scrollTop=Math.max(0,t.offsetTop-8)},120);
-   });
- };
- const startConversation=()=>{
-   if(started)return;
-   started=true;document.body.classList.add('sax-started','sax-open');
-   if(panel)panel.classList.add('sax-conversation');
-   setTimeout(pinActiveTurn,0);setTimeout(pinActiveTurn,120);
- };
- if(feed)new MutationObserver(()=>{
-   if(!started)return;
-   const current=latestTurn();
-   if(current!==lastTurn){lastTurn=current;pinActiveTurn()}
- }).observe(feed,{childList:true,subtree:true,characterData:true});
- if(composer){
-   composer.addEventListener('submit',()=>{startConversation();setTimeout(pinActiveTurn,0)},true);
-   const send=composer.querySelector('button');if(send)send.addEventListener('click',()=>{startConversation();setTimeout(pinActiveTurn,0)},true);
-   const input=composer.querySelector('textarea');if(input)input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){startConversation();setTimeout(pinActiveTurn,0)}},true);
- }
+ document.body.classList.remove('sax-expanded','sax-started');if(panel)panel.classList.remove('sax-conversation');document.body.classList.add('sax-open');
+ let started=false,lastTurn=null,pinTimer=0;
+ const latestTurn=()=>{if(!feed)return null;const turns=feed.querySelectorAll('.turn');return turns.length?turns[turns.length-1]:null};
+ const syncViewport=()=>{if(!started||innerWidth>820)return;const vv=window.visualViewport;const h=vv?vv.height:innerHeight;const top=vv?vv.offsetTop:0;document.documentElement.style.setProperty('--shx-vh',Math.round(h)+'px');document.documentElement.style.setProperty('--shx-vtop',Math.round(top)+'px')};
+ const pin=()=>{if(!started||!body)return;clearTimeout(pinTimer);requestAnimationFrame(()=>{const t=latestTurn();if(!t)return;const y=Math.max(0,t.offsetTop-8);body.scrollTo({top:y,behavior:'auto'});pinTimer=setTimeout(()=>{const n=latestTurn();if(n)body.scrollTo({top:Math.max(0,n.offsetTop-8),behavior:'auto'})},180)})};
+ const start=()=>{if(started)return;started=true;document.body.classList.add('sax-started','sax-open');if(panel)panel.classList.add('sax-conversation');syncViewport();if(input)input.blur();setTimeout(pin,30);setTimeout(pin,280)};
+ if(window.visualViewport){visualViewport.addEventListener('resize',()=>{syncViewport();setTimeout(pin,40)});visualViewport.addEventListener('scroll',syncViewport)}
+ if(feed)new MutationObserver(()=>{if(!started)return;const t=latestTurn();if(t!==lastTurn){lastTurn=t;setTimeout(pin,20)}}).observe(feed,{childList:true,subtree:false});
+ if(composer){composer.addEventListener('submit',()=>{start();setTimeout(pin,20)},true);const send=composer.querySelector('button');if(send)send.addEventListener('click',()=>{start();setTimeout(pin,20)},true);if(input)input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){start();setTimeout(pin,20)}},true)}
 })();
 </script>`;
 
@@ -75,8 +47,9 @@ export default async function handler(req,res){
   const send=res.send.bind(res);
   res.send=(body)=>{
     if(typeof body==='string'){
-      /* The original catalog script owns a lexical bottom() that forced every message/product render to scroll to the end. Disable that exact legacy behavior before injecting the new conversation anchoring. */
       body=body.replace("function bottom(){requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight})}","function bottom(){}");
+      /* On mobile the legacy ask() refocused the textarea after every response, reopening the keyboard and changing the visual viewport after we had positioned the active turn. Keep desktop focus behavior, but never force mobile focus. */
+      body=body.replace("finally{send.disabled=false;input.focus();bottom()}","finally{send.disabled=false;if(innerWidth>820)input.focus();bottom()}");
       if(body.includes('</body>'))body=body.replace('</body>',compactSax+'</body>');
     }
     return send(body);
