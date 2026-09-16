@@ -13,7 +13,6 @@ const compactSax = `
 .sax-composer{padding:8px 22px max(8px,env(safe-area-inset-bottom))!important}
 .sax-composer textarea{min-height:42px!important;max-height:105px!important;padding:9px 11px!important;font-size:15px!important;line-height:1.35!important}
 .sax-composer button{height:42px!important}
-/* Before the first question, SAX stays prominently visible without hiding the store. */
 body:not(.sax-started).sax-open{padding-left:var(--sax-w)!important;overflow:auto!important}
 body:not(.sax-started).sax-open .sax-panel{inset:0 auto 0 0!important;width:var(--sax-w)!important;max-width:430px!important;height:100dvh!important;border-right:1px solid #d9cdbf!important;transform:translateX(0)!important}
 body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
@@ -44,14 +43,12 @@ body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
  document.body.classList.add('sax-open');
  let started=false,raf=0,timer=0,lastTurn=null;
  const latestTurn=()=>{if(!feed)return null;const turns=feed.querySelectorAll('.turn');return turns.length?turns[turns.length-1]:feed.lastElementChild};
- /* Keep the current question + SAX answer at the TOP of the visible conversation area, not at the bottom of a growing feed. */
  const pinActiveTurn=()=>{
    if(!started||!feed||!body)return;
    cancelAnimationFrame(raf);clearTimeout(timer);
    raf=requestAnimationFrame(()=>{
      const turn=latestTurn();if(!turn)return;
-     const top=Math.max(0,turn.offsetTop-8);
-     body.scrollTop=top;
+     body.scrollTop=Math.max(0,turn.offsetTop-8);
      timer=setTimeout(()=>{const t=latestTurn();if(t)body.scrollTop=Math.max(0,t.offsetTop-8)},120);
    });
  };
@@ -64,8 +61,7 @@ body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
  if(feed)new MutationObserver(()=>{
    if(!started)return;
    const current=latestTurn();
-   if(current!==lastTurn){lastTurn=current;pinActiveTurn();return;}
-   /* While SAX is filling the same turn, do not continuously shove the viewport away. */
+   if(current!==lastTurn){lastTurn=current;pinActiveTurn()}
  }).observe(feed,{childList:true,subtree:true,characterData:true});
  if(composer){
    composer.addEventListener('submit',()=>{startConversation();setTimeout(pinActiveTurn,0)},true);
@@ -78,7 +74,11 @@ body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
 export default async function handler(req,res){
   const send=res.send.bind(res);
   res.send=(body)=>{
-    if(typeof body==='string'&&body.includes('</body>')) body=body.replace('</body>',compactSax+'</body>');
+    if(typeof body==='string'){
+      /* The original catalog script owns a lexical bottom() that forced every message/product render to scroll to the end. Disable that exact legacy behavior before injecting the new conversation anchoring. */
+      body=body.replace("function bottom(){requestAnimationFrame(()=>{body.scrollTop=body.scrollHeight})}","function bottom(){}");
+      if(body.includes('</body>'))body=body.replace('</body>',compactSax+'</body>');
+    }
     return send(body);
   };
   return home(req,res);
