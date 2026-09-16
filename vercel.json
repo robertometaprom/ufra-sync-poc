@@ -6,10 +6,9 @@
     "api/create-order.js": { "maxDuration": 60 },
     "api/create-checkout-session.js": { "maxDuration": 60 },
     "api/home.js": { "maxDuration": 60 },
-    "api/home-compact.js": { "maxDuration": 60 },
     "api/director.js": { "maxDuration": 60 }
   },
   "routes": [
-    { "src": "/", "dest": "/api/home-compact" }
+    { "src": "/", "dest": "/api/home" }
   ]
 }
