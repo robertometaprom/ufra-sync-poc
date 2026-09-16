@@ -15,10 +15,22 @@ async function db(path) {
 const MIN_VISIBLE_PRICE = 301;
 function roundUp(value,step){const s=Number(step)>0?Number(step):1;return Math.ceil(Number(value)/s)*s}
 function salePrice(cost,rule){return cost==null?null:roundUp(Number(cost)*Number(rule.multiplier||1)+Number(rule.fixed_markup||0),rule.round_to||1)}
-function norm(v){return String(v||'').trim().toLowerCase()}
+function norm(v){return String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function queryTokens(v){
  const stop=new Set(['de','del','la','el','los','las','un','una','unos','unas','para','por','con','y','o','en','que','quiero','busco','necesito','tienes','tienen','hay','manejas','manejan','vendes','venden','disponible','disponibilidad']);
  return norm(v).replace(/[¿?¡!,.;:()\[\]{}"']/g,' ').split(/\s+/).filter(t=>t.length>1&&!stop.has(t));
+}
+function tokenMatches(hay,token){
+ const aliases={
+  suero:['suero','serum'], serum:['serum','suero'],
+  noche:['noche','night'], night:['night','noche'],
+  dia:['dia','day'], day:['day','dia'],
+  crema:['crema','cream','moisturizer'], cream:['cream','crema'],
+  hidratante:['hidratante','hydrating','hydration','moisturizer'],
+  reafirmante:['reafirmante','firming'],
+  antiedad:['antiedad','anti-age','antiaging','anti-aging']
+ };
+ return (aliases[token]||[token]).some(t=>hay.includes(t));
 }
 function inferredGender(p){
   if(p?.gender)return norm(p.gender);
@@ -37,7 +49,7 @@ function inferredType(p){
 
 const LUXURY_BRANDS=[
   'chanel','christian dior','dior','yves saint laurent','ysl','giorgio armani','armani',
-  'tom ford','gucci','prada','hermes','hermès','givenchy','lancome','lancôme','valentino',
+  'tom ford','gucci','prada','hermes','givenchy','lancome','valentino',
   'carolina herrera','bvlgari','bulgari','dolce & gabbana','dolce gabbana','versace',
   'jean paul gaultier','narciso rodriguez','mugler','paco rabanne','rabanne','creed'
 ];
@@ -73,7 +85,7 @@ export default async function handler(req,res){
     if(gender&&inferredGender(x._p)!==gender)return false;
     if(type&&inferredType(x._p)!==type)return false;
     if(segment==='luxury'&&!isLuxury(x))return false;
-    if(qTokens.length){const hay=norm(`${x.name} ${x.brand} ${x.sku} ${x._p?.search_text||''}`);if(!qTokens.every(t=>hay.includes(t)))return false;}
+    if(qTokens.length){const hay=norm(`${x.name} ${x.brand} ${x.sku} ${x._p?.search_text||''}`);if(!qTokens.every(t=>tokenMatches(hay,t)))return false;}
     return true;
   });
 
