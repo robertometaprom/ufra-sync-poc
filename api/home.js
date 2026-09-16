@@ -39,32 +39,38 @@ body:not(.sax-started).sax-open .sax-backdrop{display:none!important}
  const feed=document.querySelector('.sax-feed'),body=document.querySelector('.sax-body'),panel=document.querySelector('.sax-panel'),composer=document.querySelector('.sax-composer');
  const label=()=>document.querySelectorAll('.sax-feed .msg').forEach(el=>el.dataset.speaker=el.classList.contains('assistant')?'SAX':firstName());
  label();if(feed)new MutationObserver(label).observe(feed,{childList:true,subtree:true});
- /* Store first, but keep SAX visibly open as an advisor. Only the first submitted question promotes SAX to full screen. */
  document.body.classList.remove('sax-expanded','sax-started');
  if(panel)panel.classList.remove('sax-conversation');
  document.body.classList.add('sax-open');
- let started=false,raf=0,timer=0;
+ let started=false,raf=0,timer=0,lastTurn=null;
  const latestTurn=()=>{if(!feed)return null;const turns=feed.querySelectorAll('.turn');return turns.length?turns[turns.length-1]:feed.lastElementChild};
- const pinLatest=()=>{
+ /* Keep the current question + SAX answer at the TOP of the visible conversation area, not at the bottom of a growing feed. */
+ const pinActiveTurn=()=>{
    if(!started||!feed||!body)return;
    cancelAnimationFrame(raf);clearTimeout(timer);
    raf=requestAnimationFrame(()=>{
-     body.scrollTop=body.scrollHeight;
-     timer=setTimeout(()=>{body.scrollTop=body.scrollHeight},100);
-     setTimeout(()=>{body.scrollTop=body.scrollHeight},260);
+     const turn=latestTurn();if(!turn)return;
+     const top=Math.max(0,turn.offsetTop-8);
+     body.scrollTop=top;
+     timer=setTimeout(()=>{const t=latestTurn();if(t)body.scrollTop=Math.max(0,t.offsetTop-8)},120);
    });
  };
  const startConversation=()=>{
    if(started)return;
    started=true;document.body.classList.add('sax-started','sax-open');
    if(panel)panel.classList.add('sax-conversation');
-   setTimeout(pinLatest,0);setTimeout(pinLatest,120);
+   setTimeout(pinActiveTurn,0);setTimeout(pinActiveTurn,120);
  };
- if(feed)new MutationObserver(pinLatest).observe(feed,{childList:true,subtree:true,characterData:true});
+ if(feed)new MutationObserver(()=>{
+   if(!started)return;
+   const current=latestTurn();
+   if(current!==lastTurn){lastTurn=current;pinActiveTurn();return;}
+   /* While SAX is filling the same turn, do not continuously shove the viewport away. */
+ }).observe(feed,{childList:true,subtree:true,characterData:true});
  if(composer){
-   composer.addEventListener('submit',()=>{startConversation();setTimeout(pinLatest,0)},true);
-   const send=composer.querySelector('button');if(send)send.addEventListener('click',()=>{startConversation();setTimeout(pinLatest,0)},true);
-   const input=composer.querySelector('textarea');if(input)input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){startConversation();setTimeout(pinLatest,0)}},true);
+   composer.addEventListener('submit',()=>{startConversation();setTimeout(pinActiveTurn,0)},true);
+   const send=composer.querySelector('button');if(send)send.addEventListener('click',()=>{startConversation();setTimeout(pinActiveTurn,0)},true);
+   const input=composer.querySelector('textarea');if(input)input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){startConversation();setTimeout(pinActiveTurn,0)}},true);
  }
 })();
 </script>`;
