@@ -16,6 +16,10 @@ const MIN_VISIBLE_PRICE = 301;
 function roundUp(value,step){const s=Number(step)>0?Number(step):1;return Math.ceil(Number(value)/s)*s}
 function salePrice(cost,rule){return cost==null?null:roundUp(Number(cost)*Number(rule.multiplier||1)+Number(rule.fixed_markup||0),rule.round_to||1)}
 function norm(v){return String(v||'').trim().toLowerCase()}
+function queryTokens(v){
+ const stop=new Set(['de','del','la','el','los','las','un','una','unos','unas','para','por','con','y','o','en','que','quiero','busco','necesito','tienes','tienen','hay','manejas','manejan','vendes','venden','disponible','disponibilidad']);
+ return norm(v).replace(/[¿?¡!,.;:()\[\]{}"']/g,' ').split(/\s+/).filter(t=>t.length>1&&!stop.has(t));
+}
 function inferredGender(p){
   if(p?.gender)return norm(p.gender);
   const n=` ${String(p?.canonical_name||'').toUpperCase()} `;
@@ -47,6 +51,7 @@ export default async function handler(req,res){
  try{
   if(req.method!=='GET')return res.status(405).json({ok:false,error:'Method not allowed'});
   const q=norm(req.query?.q).slice(0,120),brand=norm(req.query?.brand).slice(0,80),gender=norm(req.query?.gender).slice(0,30),type=norm(req.query?.type).slice(0,30),segment=norm(req.query?.segment).slice(0,30);
+  const qTokens=queryTokens(q);
   const minPrice=Math.max(0,Number(req.query?.minPrice||0)),maxPrice=Math.max(0,Number(req.query?.maxPrice||0));
   const effectiveMinPrice=Math.max(MIN_VISIBLE_PRICE,minPrice||0);
   const limit=Math.min(12,Math.max(1,parseInt(String(req.query?.limit||'8'),10)||8));
@@ -54,7 +59,6 @@ export default async function handler(req,res){
   const rules=await db(`pricing_rules?store_id=eq.${storeId}&active=eq.true&select=multiplier,fixed_markup,round_to&order=priority.asc&limit=1`),rule=rules?.[0];if(!rule)throw new Error('Pricing not configured');
 
   const select='product_id,products(canonical_name,brand,gender,fragrance_type,size_ml,image_url,search_text),supplier_products(supplier_sku,supplier_price,in_stock)';
-  /* The catalog currently exceeds 2,000 products. SAX must search every published row, not only the first two REST pages. */
   const pages=await Promise.all([0,1000,2000].map(offset=>db(`store_products?store_id=eq.${storeId}&published=eq.true&select=${select}&limit=1000&offset=${offset}`)));
   const rows=pages.flat();
   let products=rows.map(row=>{
@@ -69,7 +73,7 @@ export default async function handler(req,res){
     if(gender&&inferredGender(x._p)!==gender)return false;
     if(type&&inferredType(x._p)!==type)return false;
     if(segment==='luxury'&&!isLuxury(x))return false;
-    if(q){const hay=norm(`${x.name} ${x.brand} ${x.sku} ${x._p?.search_text||''}`);if(!hay.includes(q))return false;}
+    if(qTokens.length){const hay=norm(`${x.name} ${x.brand} ${x.sku} ${x._p?.search_text||''}`);if(!qTokens.every(t=>hay.includes(t)))return false;}
     return true;
   });
 
