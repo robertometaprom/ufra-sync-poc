@@ -54,7 +54,8 @@ export default async function handler(req,res){
   const rules=await db(`pricing_rules?store_id=eq.${storeId}&active=eq.true&select=multiplier,fixed_markup,round_to&order=priority.asc&limit=1`),rule=rules?.[0];if(!rule)throw new Error('Pricing not configured');
 
   const select='product_id,products(canonical_name,brand,gender,fragrance_type,size_ml,image_url,search_text),supplier_products(supplier_sku,supplier_price,in_stock)';
-  const pages=await Promise.all([0,1000].map(offset=>db(`store_products?store_id=eq.${storeId}&published=eq.true&select=${select}&limit=1000&offset=${offset}`)));
+  /* The catalog currently exceeds 2,000 products. SAX must search every published row, not only the first two REST pages. */
+  const pages=await Promise.all([0,1000,2000].map(offset=>db(`store_products?store_id=eq.${storeId}&published=eq.true&select=${select}&limit=1000&offset=${offset}`)));
   const rows=pages.flat();
   let products=rows.map(row=>{
     const p=Array.isArray(row.products)?row.products[0]:row.products,s=Array.isArray(row.supplier_products)?row.supplier_products[0]:row.supplier_products;
