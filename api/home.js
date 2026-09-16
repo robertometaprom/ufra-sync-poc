@@ -23,6 +23,9 @@ const compactSax = `
 </style>
 <script id="shx-sax-speakers">
 (()=>{
+ /* A fresh page load must show SHAXXIA first. SAX remains visible through its CTA/tab. */
+ document.body.classList.remove('sax-open','sax-expanded');
+ const panel=document.querySelector('.sax-panel');if(panel)panel.classList.remove('sax-conversation');
  const firstName=()=>{try{const s=JSON.parse(localStorage.getItem('shaxx_auth_v1')||'null');const u=s&&s.user;const n=(u&&u.user_metadata&&(u.user_metadata.full_name||u.user_metadata.name||u.user_metadata.given_name)||'').trim();return n?n.split(/\\s+/)[0]:'Tú'}catch{return 'Tú'}};
  const label=()=>document.querySelectorAll('.sax-feed .msg').forEach(el=>el.dataset.speaker=el.classList.contains('assistant')?'SAX':firstName());
  label();const feed=document.querySelector('.sax-feed');if(feed)new MutationObserver(label).observe(feed,{childList:true,subtree:true});
