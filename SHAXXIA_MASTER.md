@@ -316,6 +316,46 @@ Gallery backfill:
 - skips existing galleries and is resumable.
 - completed across all 2,239 products on 2026-09-09.
 
+## 15A. COD / inventory-recovery policy — CURRENT BUSINESS DECISION (2026-09-23)
+
+COD is a conversion tool, not a universal checkout entitlement. SHAXXIA will enable COD deliberately for selected products/campaigns, especially products receiving paid advertising and dedicated landing-page traffic. The general storefront remains available for credibility, assortment and discovery; COD does not need to be offered across the full catalog.
+
+Initial COD guardrails:
+- UFRA products: COD is restricted because UFRA does not accept returns. A rejected/unreceived COD order can become SHAXXIA inventory.
+- Initial UFRA COD limit: MXN $2,000 for a new customer and maximum 1 product per COD order.
+- COD must also be eligible by destination/coverage. High-risk or unsupported zones/CPs may be excluded.
+- Successful COD history may earn a higher COD limit later. Exact increases are intentionally not fixed yet; evolve from real order data.
+- A rejected/non-received COD order can remove future COD eligibility for that customer while still allowing prepaid purchases.
+- Product-level control is required: even under UFRA, many products should never receive COD. SHAXXIA deliberately enables COD for products it is willing to own/resell if delivery fails.
+- Do not expose the internal risk engine to customers. If COD qualifies, show “Paga al recibir”; if it does not, simply show prepaid payment methods.
+- Keep the first risk model simple and auditable: product eligibility + amount + quantity + destination/coverage + COD history. Expand only from real data.
+
+Supplier-specific inventory recovery:
+- UFRA: no returns. Treat failed COD inventory as SHAXXIA's risk.
+- Sephora: operating assumption supplied by the business is a 20-day return window when the box remains closed. This makes unopened failed-COD inventory substantially more recoverable. When Sephora is integrated, track purchase date and return deadline per sourced item/order.
+- Because recoverability differs by supplier/product, COD policy must not be a single global store switch. Model it at supplier/product level, with product-level override.
+- Sephora is intended to support a much broader/aggressive COD policy than UFRA, subject to validating the actual Sephora sourcing workflow during integration.
+
+Commercial model:
+- Acquisition is expected to be product-led: ad / specific product -> dedicated landing -> offer -> COD or prepaid checkout.
+- The large storefront also provides brand credibility and discovery; SHAXXIA is not relying on customers browsing the entire catalog to drive the primary paid-acquisition flow.
+- COD's purpose is to remove card-entry friction on deliberately promoted products.
+
+Customer returns/exchanges:
+- Do not conflate customer returns/exchanges after receipt with failed/unreceived COD inventory recovery.
+- SHAXXIA is not fixing a broad customer return/exchange promise yet. Handle early cases pragmatically and learn from real behavior before publishing a more expansive policy.
+- Do not proactively market easy returns/exchanges in a way that encourages unnecessary returns.
+- Where the sourcing channel allows an economical resolution (for example an unopened Sephora item still within its supplier return window), SHAXXIA may resolve a genuine customer mistake generously case-by-case.
+- Customer-facing legal/policy language remains a launch task and must comply with applicable consumer law; this section records the internal commercial/operational approach, not final legal terms.
+
+COD operational dependencies still to verify:
+- Carrier/fulfillment COD enablement and coverage.
+- COD fees/commissions, settlement timing and limits.
+- Delivery-attempt rules and return-to-origin cost.
+- Perfume/beauty shipment restrictions and insurance.
+- Exact handoff/tracking lifecycle with fulfillment provider.
+- Current database flag `supports_cod` is not proof that the external COD service is enabled.
+
 ## 16. Launch dependencies / roadmap
 
 Core catalog, pricing, search, galleries, auth, customer orders and Stripe TEST are now substantially working.
