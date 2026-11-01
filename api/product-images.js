@@ -32,7 +32,11 @@ export default async function handler(req,res){try{
     if (sku && req.query?.compare === '1') {
       const safeSku = encodeURIComponent(sku);
       const matches = await db('supplier_products?supplier_sku=eq.' + safeSku + '&select=id,supplier_sku,source_url,image_url&limit=2');
-      supplierMatch = matches.length === 1 ? {id:matches[0].id,sku:matches[0].supplier_sku,oldSourceUrl:matches[0].source_url,oldImageUrl:matches[0].image_url} : {matchCount:matches.length,ambiguous:matches.length>1};
+      supplierMatch = matches.length === 1
+        ? {matchCount:1,id:matches[0].id,sku:matches[0].supplier_sku,oldSourceUrl:matches[0].source_url,oldImageUrl:matches[0].image_url,
+           proposedImageUrl:images.length===1?images[0]:null,
+           eligibleForReview:images.length===1 && !!slugSku && slugSku.toLowerCase()===sku.toLowerCase()}
+        : {matchCount:matches.length,ambiguous:matches.length>1,eligibleForReview:false};
     }
     res.setHeader('Cache-Control','no-store');
     return res.status(200).json({ok:true,mode:'tiendanube-probe',sourceUrl:target.href,sku:sku||null,candidateCount:candidates.length,count:images.length,images,supplierMatch});
