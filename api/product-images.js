@@ -26,8 +26,16 @@ export default async function handler(req,res){try{
     const slugSku = target.pathname.replace(/\/$/, '').split('/').pop()?.match(/-([a-z0-9]+)$/i)?.[1] || null;
     if (sku && slugSku && sku.toLowerCase() !== slugSku.toLowerCase()) throw new Error('SKU does not match product URL');
     const images = sku ? filterImagesBySku(candidates, sku) : candidates;
+    // Preview only: compare the matched SKU with the existing supplier record.
+    // No product or image records are changed by this path.
+    let supplierMatch = null;
+    if (sku && req.query?.compare === '1') {
+      const safeSku = encodeURIComponent(sku);
+      const matches = await db('supplier_products?supplier_sku=eq.' + safeSku + '&select=id,supplier_sku,source_url,image_url&limit=2');
+      supplierMatch = matches.length === 1 ? {id:matches[0].id,sku:matches[0].supplier_sku,oldSourceUrl:matches[0].source_url,oldImageUrl:matches[0].image_url} : {matchCount:matches.length,ambiguous:matches.length>1};
+    }
     res.setHeader('Cache-Control','no-store');
-    return res.status(200).json({ok:true,mode:'tiendanube-probe',sourceUrl:target.href,sku:sku||null,candidateCount:candidates.length,count:images.length,images});
+    return res.status(200).json({ok:true,mode:'tiendanube-probe',sourceUrl:target.href,sku:sku||null,candidateCount:candidates.length,count:images.length,images,supplierMatch});
   }
 const write=String(req.query?.write||'0')==='1';const skipExisting=String(req.query?.skipExisting||'0')==='1';const limit=Math.min(10,Math.max(1,parseInt(req.query?.limit||'3',10)));const offset=Math.max(0,parseInt(req.query?.offset||'0',10));const rows=await db(`supplier_products?source_url=not.is.null&select=id,supplier_sku,source_url&order=first_seen_at.asc,id.asc&offset=${offset}&limit=${limit}`);let existing=new Set();if(skipExisting&&rows?.length){const ids=rows.map(p=>p.id).join(',');const found=await db(`product_images?supplier_product_id=in.(${ids})&select=supplier_product_id`);existing=new Set((found||[]).map(x=>x.supplier_product_id))}const results=[];for(const p of rows||[]){if(existing.has(p.id)){results.push({sku:p.supplier_sku,count:0,skipped:true});continue}try{const r=await fetch(p.source_url,{headers:{'user-agent':'Mozilla/5.0 (compatible; UFRACommerceCatalog/1.0)','accept-language':'es-MX,es;q=0.9'},signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`UFRA ${r.status}`);const html=await r.text();const images=gallery(html);if(write&&images.length){await db('product_images?on_conflict=supplier_product_id,image_url',{method:'POST',body:JSON.stringify(images.map((image_url,i)=>({supplier_product_id:p.id,image_url,position:i,is_primary:i===0})))})}results.push({sku:p.supplier_sku,count:images.length,images});}catch(e){results.push({sku:p.supplier_sku,count:0,error:e.message})}}
 res.setHeader('Cache-Control','no-store');res.status(200).json({ok:true,write,skipExisting,offset,limit,processed:results.length,results});}catch(e){res.status(500).json({ok:false,error:e.message})}}
