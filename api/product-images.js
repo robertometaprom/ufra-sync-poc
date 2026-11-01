@@ -23,7 +23,7 @@ export default async function handler(req,res){try{
     const html = await response.text();
     const candidates = extractTiendanubeImages(html, target.href);
     const sku = String(req.query?.sku || '').trim();
-    const slugSku = target.pathname.match(/-([a-z0-9]+)\\/?$/i)?.[1] || null;
+    const slugSku = target.pathname.replace(/\/$/, '').split('/').pop()?.match(/-([a-z0-9]+)$/i)?.[1] || null;
     if (sku && slugSku && sku.toLowerCase() !== slugSku.toLowerCase()) throw new Error('SKU does not match product URL');
     const images = sku ? filterImagesBySku(candidates, sku) : candidates;
     res.setHeader('Cache-Control','no-store');
